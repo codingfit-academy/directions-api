@@ -1,0 +1,46 @@
+# 로컬 개발용 Docker Compose
+# ─────────────────────────────────────────────────────────────
+# 사용법:
+#   docker compose -f docker-compose.dev.yml up
+#
+# 이후 http://localhost:8000 으로 접근
+# DB는 자동으로 실행되며 코드 변경 시 자동 재시작됩니다 (--reload)
+# ─────────────────────────────────────────────────────────────
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: devdb
+      DB_USER: devuser
+      DB_PASS: devpass
+    # 코드 변경 시 자동 반영 (hot reload)
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       devdb
+      POSTGRES_USER:     devuser
+      POSTGRES_PASSWORD: devpass
+    ports:
+      - "5432:5432"   # DB 직접 접근 필요 시 (DBeaver 등)
+    volumes:
+      - dev-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devuser -d devdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  dev-db-data:
