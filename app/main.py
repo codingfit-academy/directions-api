@@ -17,6 +17,7 @@ DB 접근:
   아래 include_router 예시처럼 등록하세요.
 ─────────────────────────────────────────────────────────────
 """
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -114,3 +115,11 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
 # ── 라우터 추가 예시 ───────────────────────────────────────────
 # from .routers import posts
 # app.include_router(posts.router, prefix="/posts", tags=["posts"])
+
+# ── 프론트용 공개 설정 (지도 API 키 등 — 브라우저에 노출되는 값만) ──
+@app.get("/config")
+async def public_config():
+    return {
+        "naverMapsClientId": os.getenv("NAVER_MAPS_CLIENT_ID", ""),
+        "kakaoMapsAppKey":   os.getenv("KAKAO_MAPS_APP_KEY",   ""),
+    }
