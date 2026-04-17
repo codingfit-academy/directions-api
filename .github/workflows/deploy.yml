@@ -89,7 +89,7 @@ jobs:
       - name: External health check
         id: health
         run: |
-          URL="https://${{ vars.STUDENT_NAME }}-api.${{ env.DOMAIN }}/health"
+          URL="https://${{ github.event.repository.name }}.${{ env.DOMAIN }}/health"
           MAX=18; WAIT=10; ATTEMPT=0
 
           echo "Health check: $URL" | tee -a $GITHUB_STEP_SUMMARY
@@ -122,7 +122,7 @@ jobs:
             echo "|---|---|"
             echo "| Student | \`${{ vars.STUDENT_NAME }}\` |"
             echo "| Service | api |"
-            echo "| URL | https://${{ vars.STUDENT_NAME }}-api.${{ env.DOMAIN }}/health |"
+            echo "| URL | https://${{ github.event.repository.name }}.${{ env.DOMAIN }}/health |"
             echo "| 배포 시각 | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
             echo "| 배포자 | @${{ github.actor }} |"
             echo "| 사유 | ${{ github.event.inputs.reason || 'main merge' }} |"

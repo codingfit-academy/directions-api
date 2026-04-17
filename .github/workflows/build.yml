@@ -8,6 +8,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -74,7 +75,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.ORG }}/${{ vars.STUDENT_NAME }}-api
+          images: ${{ env.REGISTRY }}/${{ env.ORG }}/${{ github.event.repository.name }}
           tags: |
             type=sha,prefix=sha-,format=short
             type=raw,value=stable,enable=${{ github.event_name == 'push' }}
@@ -100,7 +101,7 @@ jobs:
         run: |
           {
             echo "## ✅ FastAPI Build & Push 완료"
-            echo "- Image: \`${{ env.REGISTRY }}/${{ env.ORG }}/${{ vars.STUDENT_NAME }}-api\`"
+            echo "- Image: \`${{ env.REGISTRY }}/${{ env.ORG }}/${{ github.event.repository.name }}\`"
             echo "- Tag: \`${{ steps.sha.outputs.tag }}\`"
             echo "- API Type: FastAPI"
           } >> $GITHUB_STEP_SUMMARY
