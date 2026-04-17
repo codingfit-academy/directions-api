@@ -77,7 +77,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.ORG }}/${{ vars.STUDENT_NAME }}-api
           tags: |
             type=sha,prefix=sha-,format=short
-            type=raw,value=candidate,enable=${{ github.event_name == 'push' }}
+            type=raw,value=stable,enable=${{ github.event_name == 'push' }}
           labels: |
             academy.student=${{ vars.STUDENT_NAME }}
             academy.service=api

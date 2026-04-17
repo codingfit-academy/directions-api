@@ -1,7 +1,19 @@
 # ─────────────────────────────────────────────────────────────
 # .github/workflows/deploy.yml  —  API (FastAPI) CD
-# front-next/deploy.yml, api-node/deploy.yml과 구조 동일
-# health check URL: https://api.<student>.codingfit.kr/health
+#
+# Trigger:
+#   - workflow_run: "Build & Push" 완료 후 자동 실행
+#   - workflow_dispatch: 수동 배포
+#
+# 승인 설정 (필수):
+#   GitHub → Repo → Settings → Environments → New environment: "production"
+#   → Required reviewers: [teacher-github-username]
+#
+# Org-level Secrets (자동 상속):
+#   DEPLOY_WEBHOOK_TOKEN  ← 배포 웹훅 토큰
+#
+# Repository Variables (Settings → Secrets and variables → Variables):
+#   STUDENT_NAME = alice    ← 반드시 설정!
 # ─────────────────────────────────────────────────────────────
 name: Deploy to Production
 
@@ -13,26 +25,20 @@ on:
 
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "배포할 이미지 태그"
-        required: false
-        default: "candidate"
-        type: string
       reason:
-        description: "배포 사유"
+        description: "배포 사유 (선택)"
         required: false
         type: string
 
 permissions:
   contents: read
-  packages: write
 
 env:
-  REGISTRY: ghcr.io
-  ORG: codingfit-academy
   DOMAIN: codingfit.kr
+  WEBHOOK_URL: https://admin.codingfit.kr/hook/deploy
 
 jobs:
+  # ── 빌드 결과 확인 ─────────────────────────────────────────
   gate:
     name: Check Build
     runs-on: ubuntu-latest
@@ -42,111 +48,82 @@ jobs:
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - id: check
+      - name: Check
+        id: check
         run: echo "proceed=true" >> $GITHUB_OUTPUT
 
+  # ── 승인 후 배포 ───────────────────────────────────────────
   deploy:
-    name: Deploy FastAPI (선생님 승인 필요)
+    name: Deploy (선생님 승인 필요)
     runs-on: ubuntu-latest
     needs: gate
     if: needs.gate.outputs.proceed == 'true'
     environment: production
 
     steps:
-      - name: Resolve image tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=candidate" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Promote image tags
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.ORG }}/${{ vars.STUDENT_NAME }}-api"
-          TAG="${{ steps.tag.outputs.tag }}"
-          if docker buildx imagetools inspect "${IMAGE}:stable" >/dev/null 2>&1; then
-            docker buildx imagetools create --tag "${IMAGE}:previous" "${IMAGE}:stable"
-          fi
-          docker buildx imagetools create --tag "${IMAGE}:stable" "${IMAGE}:${TAG}"
-          echo "- \`${TAG}\` → \`stable\` ✅" >> $GITHUB_STEP_SUMMARY
-
-      - name: Deploy via SSH
+      # ── 웹훅으로 배포 트리거 ────────────────────────────────
+      - name: Trigger deploy via webhook
         id: deploy
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_SSH_HOST }}
-          username: ${{ secrets.SERVER_SSH_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ vars.SERVER_SSH_PORT || 22 }}
-          timeout: 180s
-          command_timeout: 150s
-          script: |
-            export GHCR_TOKEN="${{ secrets.GHCR_DEPLOY_TOKEN }}"
-            export IS_EDGE_NODE=true
-            /srv/academy/scripts/deploy_from_image.sh \
-              "${{ vars.STUDENT_NAME }}" \
-              "api" \
-              "stable"
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "${{ env.WEBHOOK_URL }}/${{ vars.STUDENT_NAME }}/api")
 
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "HTTP: $HTTP_CODE"
+          echo "Body: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ 배포 트리거 실패 (HTTP $HTTP_CODE)" >> $GITHUB_STEP_SUMMARY
+            echo "$BODY" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "✅ 배포 큐 등록 완료" >> $GITHUB_STEP_SUMMARY
+
+      # ── 외부 Health Check ───────────────────────────────────
       - name: External health check
         id: health
-        continue-on-error: true
         run: |
-          URL="https://api.${{ vars.STUDENT_NAME }}.${{ env.DOMAIN }}/health"
-          MAX=12; WAIT=10; ATTEMPT=0
-          echo "Health check (FastAPI): $URL" | tee -a $GITHUB_STEP_SUMMARY
+          URL="https://${{ vars.STUDENT_NAME }}-api.${{ env.DOMAIN }}/health"
+          MAX=18; WAIT=10; ATTEMPT=0
+
+          echo "Health check: $URL" | tee -a $GITHUB_STEP_SUMMARY
+          echo "배포 완료까지 최대 $((MAX * WAIT))초 대기..."
+
           while [ $ATTEMPT -lt $MAX ]; do
             ATTEMPT=$((ATTEMPT + 1))
+            sleep $WAIT
             HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
               --max-time 15 --connect-timeout 10 "$URL" 2>/dev/null || echo "000")
+
             if [ "$HTTP" = "200" ]; then
-              echo "✅ HTTP $HTTP (시도 $ATTEMPT)" | tee -a $GITHUB_STEP_SUMMARY
+              echo "✅ HTTP $HTTP (시도 $ATTEMPT/${MAX})" | tee -a $GITHUB_STEP_SUMMARY
               exit 0
             fi
-            echo "시도 $ATTEMPT/${MAX}: HTTP $HTTP"; sleep $WAIT
+
+            echo "시도 $ATTEMPT/${MAX}: HTTP $HTTP — 재시도..."
           done
-          echo "❌ FastAPI Health check 실패" | tee -a $GITHUB_STEP_SUMMARY; exit 1
 
-      - name: Auto rollback — server
-        if: steps.health.outcome == 'failure'
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_SSH_HOST }}
-          username: ${{ secrets.SERVER_SSH_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            export IS_EDGE_NODE=true
-            /srv/academy/scripts/rollback_student.sh "${{ vars.STUDENT_NAME }}" "api"
+          echo "❌ Health check 실패 (${MAX}회 초과)" | tee -a $GITHUB_STEP_SUMMARY
+          exit 1
 
-      - name: Auto rollback — restore GHCR stable
-        if: steps.health.outcome == 'failure'
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.ORG }}/${{ vars.STUDENT_NAME }}-api"
-          docker buildx imagetools create --tag "${IMAGE}:stable" "${IMAGE}:previous" 2>/dev/null || true
-
-      - name: Fail after rollback
-        if: steps.health.outcome == 'failure'
-        run: exit 1
-
+      # ── 성공 요약 ─────────────────────────────────────────
       - name: Success summary
-        if: steps.health.outcome == 'success'
+        if: success()
         run: |
           {
-            echo "## ✅ FastAPI 배포 성공"
+            echo "## ✅ 배포 성공"
             echo "| 항목 | 값 |"
             echo "|---|---|"
             echo "| Student | \`${{ vars.STUDENT_NAME }}\` |"
-            echo "| Service | api (FastAPI) |"
-            echo "| URL | https://api.${{ vars.STUDENT_NAME }}.${{ env.DOMAIN }}/health |"
+            echo "| Service | api |"
+            echo "| URL | https://${{ vars.STUDENT_NAME }}-api.${{ env.DOMAIN }}/health |"
             echo "| 배포 시각 | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
             echo "| 배포자 | @${{ github.actor }} |"
+            echo "| 사유 | ${{ github.event.inputs.reason || 'main merge' }} |"
           } >> $GITHUB_STEP_SUMMARY
