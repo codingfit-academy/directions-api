@@ -18,6 +18,11 @@ services:
       DB_NAME: devdb
       DB_USER: devuser
       DB_PASS: devpass
+      # 공공데이터포털 인증키 (경찰청 교차로기반정보서비스 등)
+      DATA_GO_KR_SERVICE_KEY: "${DATA_GO_KR_SERVICE_KEY:-}"
+      # 프론트에 노출할 지도 API 키
+      NAVER_MAPS_CLIENT_ID: "${NAVER_MAPS_CLIENT_ID:-}"
+      KAKAO_MAPS_APP_KEY: "${KAKAO_MAPS_APP_KEY:-}"
     # 코드 변경 시 자동 반영 (hot reload)
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
@@ -27,7 +32,7 @@ services:
         condition: service_healthy
 
   db:
-    image: postgres:16-alpine
+    image: postgis/postgis:16-3.4-alpine
     environment:
       POSTGRES_DB:       devdb
       POSTGRES_USER:     devuser

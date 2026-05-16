@@ -27,19 +27,21 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .database import Base, engine, get_db
+from .database import Base, enable_postgis, engine, get_db
 from .models import Item
+from .routers import signals as signals_router
 
 
-# ── 앱 시작 시 테이블 자동 생성 ───────────────────────────────
+# ── 앱 시작 시 PostGIS 확장 활성화 + 테이블 자동 생성 ───────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await enable_postgis()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
 
 
-app = FastAPI(title="Academy API", lifespan=lifespan)
+app = FastAPI(title="Directions API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -70,7 +72,6 @@ async def health(db: AsyncSession = Depends(get_db)):
         return {"status": "ok", "db": "connected"}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"DB 연결 실패: {e}")
-
 
 @app.get("/")
 async def root():
@@ -112,9 +113,8 @@ async def delete_item(item_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 
-# ── 라우터 추가 예시 ───────────────────────────────────────────
-# from .routers import posts
-# app.include_router(posts.router, prefix="/posts", tags=["posts"])
+# ── 라우터 등록 ────────────────────────────────────────────────
+app.include_router(signals_router.router)
 
 # ── 프론트용 공개 설정 (지도 API 키 등 — 브라우저에 노출되는 값만) ──
 @app.get("/config")

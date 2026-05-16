@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"c:\\\\Users\\\\codin\\\\Documents\\\\길 찾기\\\\01_프로젝트\\\\directions-front\\\\src\")",
+      "Read(//c/Users/codin/Documents/길 찾기/01_프로젝트/directions-front/src/**)",
+      "WebSearch",
+      "WebFetch(domain:www.data.go.kr)"
+    ]
+  }
+}

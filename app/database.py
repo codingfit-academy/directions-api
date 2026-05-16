@@ -12,6 +12,7 @@ DB 연결 설정
 """
 import os
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -32,6 +33,11 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 
 class Base(DeclarativeBase):
     pass
+
+
+async def enable_postgis() -> None:
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
 
 
 async def get_db():
