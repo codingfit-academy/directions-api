@@ -122,6 +122,6 @@ app.include_router(directions_router.router)
 @app.get("/config")
 async def public_config():
     return {
-        "naverMapsClientId": os.getenv("NAVER_MAPS_CLIENT_ID", ""),
-        "kakaoMapsAppKey":   os.getenv("KAKAO_MAPS_APP_KEY",   ""),
+        "naverMapsClientId": "codingfit",
+        "kakaoMapsAppKey":   "fondkjpfpo",
     }

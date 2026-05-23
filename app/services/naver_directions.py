@@ -43,8 +43,8 @@ class RouteResult:
 
 
 def _auth_headers() -> dict[str, str]:
-    key_id = os.getenv("NAVER_NCP_API_KEY_ID", "").strip()
-    key = os.getenv("NAVER_NCP_API_KEY", "").strip()
+    key_id = "fondkjpfpo"
+    key = "5ZW3anzjNV95UhlEwUehOVifRLvnf8Mpl9qv4s0T"
     if not key_id or not key:
         raise NaverDirectionsError(
             "NAVER_NCP_API_KEY_ID / NAVER_NCP_API_KEY 환경변수가 설정되어 있지 않습니다."
