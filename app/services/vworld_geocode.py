@@ -144,3 +144,86 @@ async def geocode(query: str, timeout: float = 10.0) -> VWorldGeocodeResult:
             return r
 
     raise VWorldError(f"VWorld에서 '{query}' 위치를 찾지 못했습니다.")
+
+
+async def _search_multi(
+    client: httpx.AsyncClient, query: str, size: int
+) -> list[VWorldGeocodeResult]:
+    """Search API 다중 결과."""
+    params = {
+        "service": "search",
+        "request": "search",
+        "version": "2.0",
+        "crs": "EPSG:4326",
+        "query": query,
+        "type": "PLACE",
+        "size": str(size),
+        "page": "1",
+        "format": "json",
+        "errorformat": "json",
+        "key": VWORLD_API_KEY,
+    }
+    res = await client.get(SEARCH_URL, params=params)
+    if res.status_code != 200:
+        return []
+    try:
+        payload = res.json()
+    except ValueError:
+        return []
+
+    response = payload.get("response") or {}
+    if response.get("status") != "OK":
+        return []
+    items = (response.get("result") or {}).get("items") or []
+    out: list[VWorldGeocodeResult] = []
+    for it in items:
+        point = it.get("point") or {}
+        try:
+            lng = float(point.get("x"))
+            lat = float(point.get("y"))
+        except (TypeError, ValueError):
+            continue
+        addr = it.get("address") or {}
+        title = (it.get("title") or "").strip()
+        addr_text = (addr.get("road") or addr.get("parcel") or "").strip()
+        if title and addr_text:
+            label = f"{title} ({addr_text})"
+        else:
+            label = title or addr_text or "(이름 없음)"
+        out.append(VWorldGeocodeResult(lat=lat, lng=lng, address=label))
+    return out
+
+
+async def search_candidates(
+    query: str, limit: int = 5, timeout: float = 10.0
+) -> list[VWorldGeocodeResult]:
+    """주소 1건 + POI N건 형태로 후보 목록을 반환한다."""
+    if not query or not query.strip():
+        raise VWorldError("검색어가 비어 있습니다.")
+    if not VWORLD_API_KEY:
+        raise VWorldError("VWORLD_API_KEY 가 비어 있습니다.")
+
+    candidates: list[VWorldGeocodeResult] = []
+    seen_keys: set[tuple[float, float]] = set()
+
+    def _add(r: VWorldGeocodeResult) -> None:
+        key = (round(r.lat, 5), round(r.lng, 5))
+        if key in seen_keys:
+            return
+        seen_keys.add(key)
+        candidates.append(r)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # 1) 정확한 주소 매칭 시도 (도로명 → 지번)
+        for addr_type in ("ROAD", "PARCEL"):
+            r = await _geocoder(client, query, addr_type)
+            if r:
+                _add(r)
+        # 2) POI 다중 결과 추가
+        pois = await _search_multi(client, query, max(1, limit))
+        for p in pois:
+            if len(candidates) >= limit:
+                break
+            _add(p)
+
+    return candidates[:limit]

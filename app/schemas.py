@@ -54,9 +54,13 @@ class RoutePoint(BaseModel):
 class RouteRequest(BaseModel):
     origin: RoutePoint
     destination: RoutePoint
+    mode: str = Field(
+        default="walking",
+        description="이동 모드: 'walking'(T-map 보행자) 또는 'driving'(Naver Directions 5)",
+    )
     option: str = Field(
         default="trafast",
-        description="Naver Directions 5 옵션: trafast(빠른길) / tracomfort(편한길) / traoptimal(추천)",
+        description="driving 모드 옵션: trafast(빠른길) / tracomfort(편한길) / traoptimal(추천)",
     )
     signal_buffer_m: int = Field(
         default=30, ge=0, le=200, description="경로 폴리라인에서 신호등을 수집할 버퍼(m)"
@@ -76,6 +80,7 @@ class RealtimeTraffic(BaseModel):
 
 
 class RouteResponse(BaseModel):
+    mode: str = Field(default="walking", description="실제 사용된 이동 모드")
     origin: GeocodeOut
     destination: GeocodeOut
     duration_ms: int

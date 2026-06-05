@@ -51,6 +51,12 @@ KAKAO_REST_API_KEY = _val("KAKAO_REST_API_KEY", "d95e04ad3654a2ebad057b45f62ecf3
 # Geocoder: 주소 → 좌표 / Search: 키워드(장소명) → 좌표
 VWORLD_API_KEY = _val("VWORLD_API_KEY", "AE2D3A36-9F19-3B08-8394-EC64E8266DDC")
 
+# ── T-map 보행자 경로 (SK Telecom Open API) ────────────────────
+# 발급: https://openapi.sk.com → 가입 → 앱 등록 → "T-map 보행자 경로안내" 추가
+# 무료, 월 50,000 transactions, 학생 가능.
+# 비워두면 보행 모드 요청 시 Naver Directions 5(자동차)로 자동 폴백.
+TMAP_API_KEY = _val("TMAP_API_KEY", "njw4yBAyB83Ym0MN9fCrP4wnecYGCbs15zggefg3")
+
 # ── 공공데이터포털 (경찰청 교차로 API) ─────────────────────────
 DATA_GO_KR_SERVICE_KEY = _val(
     "DATA_GO_KR_SERVICE_KEY",
@@ -73,3 +79,8 @@ SEOUL_OPENAPI_DATASET = _val("SEOUL_OPENAPI_DATASET", "TrafficInfo")
 # 기본값은 사용자 제공한 샘플 LINK_ID 하나. 더 다양한 도로를 평균에 포함시키려면
 # 쉼표로 추가하세요. (예: "1220003800,1220004100,1220004300")
 SEOUL_TOPIS_LINK_IDS = _val("SEOUL_TOPIS_LINK_IDS", "1220003800")
+
+# ── 길찾기 제한 ───────────────────────────────────────────────
+# 본 앱은 '근거리 신호등 정보를 통한 최단시간 보행'이 목적이라
+# 출발지~도착지 직선거리 상한을 둔다. (Haversine 미터)
+MAX_ROUTE_DISTANCE_M = int(_val("MAX_ROUTE_DISTANCE_M", "2000"))
