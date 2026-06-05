@@ -17,6 +17,8 @@ from ..schemas import (
     RouteResponse,
     SignalOut,
 )
+from ..services.kakao_local import KakaoLocalError
+from ..services.kakao_local import geocode as kakao_geocode
 from ..services.naver_directions import (
     GeocodeResult,
     NaverDirectionsError,
@@ -25,6 +27,29 @@ from ..services.naver_directions import (
 )
 
 router = APIRouter(prefix="/directions", tags=["directions"])
+
+
+async def _geocode_with_fallback(query: str) -> GeocodeResult:
+    """NCP Geocoding을 먼저 시도하고, 실패하면 Kakao Local로 폴백."""
+    naver_err: NaverDirectionsError | None = None
+    try:
+        return await geocode(query)
+    except NaverDirectionsError as exc:
+        naver_err = exc
+
+    try:
+        kakao = await kakao_geocode(query)
+        return GeocodeResult(
+            lat=kakao.lat,
+            lng=kakao.lng,
+            address=kakao.address,
+            road_address=None,
+        )
+    except KakaoLocalError as kakao_err:
+        detail = f"NCP: {naver_err}"
+        if str(kakao_err):
+            detail += f" / Kakao: {kakao_err}"
+        raise HTTPException(status_code=400, detail=detail)
 
 
 async def _resolve(point, default_label: str) -> GeocodeResult:
@@ -36,20 +61,14 @@ async def _resolve(point, default_label: str) -> GeocodeResult:
             address=(point.text or default_label),
             road_address=None,
         )
-    try:
-        return await geocode(point.text or "")
-    except NaverDirectionsError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    return await _geocode_with_fallback(point.text or "")
 
 
 @router.get("/geocode", response_model=GeocodeOut)
 async def geocode_endpoint(
     q: str = Query(..., min_length=1, description="검색어(주소/장소명)"),
 ):
-    try:
-        result = await geocode(q)
-    except NaverDirectionsError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    result = await _geocode_with_fallback(q)
     return GeocodeOut(
         lat=result.lat,
         lng=result.lng,

@@ -17,7 +17,6 @@ DB 접근:
   아래 include_router 예시처럼 등록하세요.
 ─────────────────────────────────────────────────────────────
 """
-import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -27,6 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .config import KAKAO_MAPS_APP_KEY, NAVER_MAPS_CLIENT_ID
 from .database import Base, enable_postgis, engine, get_db
 from .models import Item
 from .routers import directions as directions_router
@@ -122,6 +122,6 @@ app.include_router(directions_router.router)
 @app.get("/config")
 async def public_config():
     return {
-        "naverMapsClientId": os.getenv("NAVER_MAPS_CLIENT_ID", ""),
-        "kakaoMapsAppKey":   os.getenv("KAKAO_MAPS_APP_KEY",   ""),
+        "naverMapsClientId": NAVER_MAPS_CLIENT_ID,
+        "kakaoMapsAppKey":   KAKAO_MAPS_APP_KEY,
     }

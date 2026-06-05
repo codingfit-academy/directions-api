@@ -8,11 +8,12 @@
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
 import httpx
+
+from ..config import DATA_GO_KR_SERVICE_KEY
 
 BASE_URL = "http://apis.data.go.kr/1320000/CrossRoadInfoService/getCrossRoadInfoList"
 
@@ -31,13 +32,12 @@ class DataGoKrError(RuntimeError):
 
 
 def _service_key() -> str:
-    key = 'jutsK03GIi7fwrWWcej3ICerdC1bJ0/40+ZMc+gJzGEgmsX2V5Q///qHA1vQYRqNka1j8Bepp82i44g6kuK/8A=='
-    if not key:
+    if not DATA_GO_KR_SERVICE_KEY:
         raise DataGoKrError(
-            "DATA_GO_KR_SERVICE_KEY 환경변수가 설정되어 있지 않습니다. "
+            "app/config.py 의 DATA_GO_KR_SERVICE_KEY 가 비어 있습니다. "
             "공공데이터포털에서 발급받은 일반 인증키(Decoding)를 설정하세요."
         )
-    return key
+    return DATA_GO_KR_SERVICE_KEY
 
 
 def _to_float(v: object) -> Optional[float]:

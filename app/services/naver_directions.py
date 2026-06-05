@@ -12,11 +12,12 @@ Naver Cloud Platform Maps API 클라이언트.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Optional
 
 import httpx
+
+from ..config import NAVER_NCP_API_KEY, NAVER_NCP_API_KEY_ID
 
 GEOCODE_URL = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
 DRIVING_URL = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
@@ -43,15 +44,13 @@ class RouteResult:
 
 
 def _auth_headers() -> dict[str, str]:
-    key_id = "fondkjpfpo"
-    key = "5ZW3anzjNV95UhlEwUehOVifRLvnf8Mpl9qv4s0T"
-    if not key_id or not key:
+    if not NAVER_NCP_API_KEY_ID or not NAVER_NCP_API_KEY:
         raise NaverDirectionsError(
-            "NAVER_NCP_API_KEY_ID / NAVER_NCP_API_KEY 환경변수가 설정되어 있지 않습니다."
+            "app/config.py 의 NAVER_NCP_API_KEY_ID / NAVER_NCP_API_KEY 가 비어 있습니다."
         )
     return {
-        "X-NCP-APIGW-API-KEY-ID": key_id,
-        "X-NCP-APIGW-API-KEY": key,
+        "X-NCP-APIGW-API-KEY-ID": NAVER_NCP_API_KEY_ID,
+        "X-NCP-APIGW-API-KEY": NAVER_NCP_API_KEY,
     }
 
 
@@ -64,6 +63,10 @@ async def geocode(query: str, timeout: float = 10.0) -> GeocodeResult:
     async with httpx.AsyncClient(timeout=timeout) as client:
         res = await client.get(GEOCODE_URL, headers=headers, params={"query": query})
 
+    if res.status_code == 401:
+        raise NaverDirectionsError(
+            "NCP Geocoding 401 — Application에 'Maps Geocoding' 서비스가 추가되어 있는지 확인하세요."
+        )
     if res.status_code != 200:
         raise NaverDirectionsError(
             f"Geocode 실패: status={res.status_code} body={res.text[:200]}"
@@ -107,6 +110,10 @@ async def driving_route(
     async with httpx.AsyncClient(timeout=timeout) as client:
         res = await client.get(DRIVING_URL, headers=headers, params=params)
 
+    if res.status_code == 401:
+        raise NaverDirectionsError(
+            "NCP Directions 401 — Application에 'Maps Direction 5' 서비스가 추가되어 있는지 확인하세요."
+        )
     if res.status_code != 200:
         raise NaverDirectionsError(
             f"Directions 실패: status={res.status_code} body={res.text[:200]}"
