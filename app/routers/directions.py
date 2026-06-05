@@ -142,11 +142,11 @@ async def route_endpoint(
             int((s.cycle_time or 0) / 2) for s in signals if s.cycle_time
         )
 
-    # 서울 TOPIS 실시간 도로 소통 보정 (키 있을 때만)
+    # 서울 TOPIS 실시간 도로 소통 보정 (키 있을 때만, 실패해도 라우트는 진행)
     realtime: RealtimeTraffic | None = None
     adjusted_duration_ms = route.duration_ms
     try:
-        summary = await fetch_realtime_summary(max_samples=1000)
+        summary = await fetch_realtime_summary()
         if summary.sample_count > 0:
             # 평균 속도 기준 보정 (한국 도시부 자유속도 ≈ 35km/h 가정)
             free_speed = 35.0
@@ -159,8 +159,8 @@ async def route_endpoint(
                 congestion=summary.congestion,
                 eta_factor=round(factor, 2),
             )
-    except SeoulTopisError:
-        # 키 미설정/외부 API 장애 시 보정 없이 진행
+    except (SeoulTopisError, Exception):
+        # 키 미설정/외부 API 장애/타입 오류 등 — 보정 없이 진행
         realtime = None
 
     return RouteResponse(
