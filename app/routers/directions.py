@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..schemas import (
     GeocodeOut,
+    RealtimeTraffic,
     RouteRequest,
     RouteResponse,
     SignalOut,
@@ -25,31 +26,42 @@ from ..services.naver_directions import (
     driving_route,
     geocode,
 )
+from ..services.seoul_topis import SeoulTopisError, fetch_realtime_summary
+from ..services.vworld_geocode import VWorldError
+from ..services.vworld_geocode import geocode as vworld_geocode
 
 router = APIRouter(prefix="/directions", tags=["directions"])
 
 
 async def _geocode_with_fallback(query: str) -> GeocodeResult:
-    """NCP Geocoding을 먼저 시도하고, 실패하면 Kakao Local로 폴백."""
-    naver_err: NaverDirectionsError | None = None
+    """폴백 체인: NCP Geocoding → VWorld → Kakao Local."""
+    errors: list[str] = []
+
+    # 1) NCP Geocoding (정밀 주소)
     try:
         return await geocode(query)
     except NaverDirectionsError as exc:
-        naver_err = exc
+        errors.append(f"NCP: {exc}")
 
+    # 2) VWorld (주소 + POI 검색)
     try:
-        kakao = await kakao_geocode(query)
+        v = await vworld_geocode(query)
         return GeocodeResult(
-            lat=kakao.lat,
-            lng=kakao.lng,
-            address=kakao.address,
-            road_address=None,
+            lat=v.lat, lng=v.lng, address=v.address, road_address=None
         )
-    except KakaoLocalError as kakao_err:
-        detail = f"NCP: {naver_err}"
-        if str(kakao_err):
-            detail += f" / Kakao: {kakao_err}"
-        raise HTTPException(status_code=400, detail=detail)
+    except VWorldError as exc:
+        errors.append(f"VWorld: {exc}")
+
+    # 3) Kakao Local (활성화된 경우)
+    try:
+        k = await kakao_geocode(query)
+        return GeocodeResult(
+            lat=k.lat, lng=k.lng, address=k.address, road_address=None
+        )
+    except KakaoLocalError as exc:
+        errors.append(f"Kakao: {exc}")
+
+    raise HTTPException(status_code=400, detail=" / ".join(errors))
 
 
 async def _resolve(point, default_label: str) -> GeocodeResult:
@@ -130,6 +142,27 @@ async def route_endpoint(
             int((s.cycle_time or 0) / 2) for s in signals if s.cycle_time
         )
 
+    # 서울 TOPIS 실시간 도로 소통 보정 (키 있을 때만)
+    realtime: RealtimeTraffic | None = None
+    adjusted_duration_ms = route.duration_ms
+    try:
+        summary = await fetch_realtime_summary(max_samples=1000)
+        if summary.sample_count > 0:
+            # 평균 속도 기준 보정 (한국 도시부 자유속도 ≈ 35km/h 가정)
+            free_speed = 35.0
+            factor = max(0.6, min(2.0, free_speed / summary.avg_speed_kmh))
+            adjusted_duration_ms = int(route.duration_ms * factor)
+            realtime = RealtimeTraffic(
+                sample_count=summary.sample_count,
+                avg_speed_kmh=summary.avg_speed_kmh,
+                timestamp=summary.timestamp,
+                congestion=summary.congestion,
+                eta_factor=round(factor, 2),
+            )
+    except SeoulTopisError:
+        # 키 미설정/외부 API 장애 시 보정 없이 진행
+        realtime = None
+
     return RouteResponse(
         origin=GeocodeOut(
             lat=origin.lat,
@@ -143,9 +176,10 @@ async def route_endpoint(
             address=destination.address,
             road_address=destination.road_address,
         ),
-        duration_ms=route.duration_ms,
+        duration_ms=adjusted_duration_ms,
         distance_m=route.distance_m,
         path=[[lat, lng] for lat, lng in path_pairs],
         signals=signals,
         signal_delay_estimate_s=signal_delay,
+        realtime_traffic=realtime,
     )

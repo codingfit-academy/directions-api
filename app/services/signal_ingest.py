@@ -21,7 +21,8 @@ async def ingest_police_crossroads(
     """
     경찰청 교차로기반정보서비스의 결과를 signals 테이블에 upsert.
 
-    좌표는 EPSG:5179로 들어오므로 ST_Transform으로 WGS84(4326)으로 변환한다.
+    police_api에서 이미 WGS84 도(°) 단위로 변환되어 들어오므로
+    SRID 4326으로 그대로 저장한다.
     """
     fetched = inserted = updated = 0
 
@@ -33,7 +34,7 @@ async def ingest_police_crossroads(
             :source_id,
             :name,
             :region_cd,
-            ST_Transform(ST_SetSRID(ST_MakePoint(:x, :y), 5179), 4326),
+            ST_SetSRID(ST_MakePoint(:x, :y), 4326),
             NOW()
         )
         ON CONFLICT (source, source_id) DO UPDATE

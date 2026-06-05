@@ -2,11 +2,15 @@
 Naver Cloud Platform Maps API 클라이언트.
 
 - Geocoding API: 주소/장소명 → 좌표
-  https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode
+  https://maps.apigw.ntruss.com/map-geocode/v2/geocode
 - Directions 5 API: 출발/도착 좌표 → 자동차 경로
-  https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving
+  https://maps.apigw.ntruss.com/map-direction/v1/driving
 
-서버측에서만 호출되며, 자격 증명은 환경변수에서 읽습니다.
+※ 옛 도메인 naveropenapi.apigw.ntruss.com 은 NCP Maps 마이그레이션 이후
+  401 "A subscription to the API is required" 가 반환되므로
+  반드시 maps.apigw.ntruss.com 을 사용해야 합니다.
+
+자격 증명은 app/config.py 또는 환경변수에서 읽습니다.
   NAVER_NCP_API_KEY_ID  (X-NCP-APIGW-API-KEY-ID)
   NAVER_NCP_API_KEY     (X-NCP-APIGW-API-KEY)
 """
@@ -19,8 +23,8 @@ import httpx
 
 from ..config import NAVER_NCP_API_KEY, NAVER_NCP_API_KEY_ID
 
-GEOCODE_URL = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
-DRIVING_URL = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
+GEOCODE_URL = "https://maps.apigw.ntruss.com/map-geocode/v2/geocode"
+DRIVING_URL = "https://maps.apigw.ntruss.com/map-direction/v1/driving"
 
 
 class NaverDirectionsError(RuntimeError):

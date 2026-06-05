@@ -2,8 +2,10 @@
 경찰청 교차로기반정보서비스 API 클라이언트.
 
 - 서비스 URL: http://apis.data.go.kr/1320000/CrossRoadInfoService/getCrossRoadInfoList
-- 응답 좌표는 EPSG:5179 (Korea 2000 / Unified TM) 기준으로
-  일반 회입되므로 PostGIS 적재 시 ST_Transform으로 WGS84로 변환한다.
+- 응답은 최상위 배열 형태: [{메타데이터}, {item1}, {item2}, ...]
+  메타데이터에 resultCode/resultMsg/totalCount/pageNo/totPage/numOfRows 가 들어있다.
+- X_COORD / Y_COORD 는 WGS84 좌표를 정수로(×10^7) 표현한다.
+  예: Y_COORD=374915430 → 37.4915430°N, X_COORD=1270306860 → 127.0306860°E
 - 서울 자료만 제공되므로 srchCTid는 서울 지역코드를 고정값으로 쓸 수 있다.
 """
 from __future__ import annotations
@@ -23,8 +25,8 @@ class CrossRoad:
     region_cd: str
     int_no: str
     int_nm: str
-    x_coord: float  # EPSG:5179 X
-    y_coord: float  # EPSG:5179 Y
+    x_coord: float  # WGS84 경도(°)
+    y_coord: float  # WGS84 위도(°)
 
 
 class DataGoKrError(RuntimeError):
@@ -47,6 +49,14 @@ def _to_float(v: object) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _coord_int_to_deg(v: object) -> Optional[float]:
+    """degrees × 10^7 정수 문자열을 도(°) 단위 float로 변환."""
+    f = _to_float(v)
+    if f is None:
+        return None
+    return f / 1e7
 
 
 async def fetch_crossroads(
@@ -79,25 +89,24 @@ async def fetch_crossroads(
                     f"응답을 JSON으로 파싱할 수 없습니다 (인증키 오류일 수 있음): {res.text[:200]}"
                 ) from exc
 
-            response = payload.get("response", {})
-            header = response.get("header", {})
-            result_code = header.get("resultCode")
-            if result_code not in ("00", "0", None):
+            # 새 응답 형식: [{메타데이터}, {item1}, {item2}, ...]
+            if not isinstance(payload, list) or not payload:
                 raise DataGoKrError(
-                    f"공공 API 오류: code={result_code} msg={header.get('resultMsg')}"
+                    f"예상치 못한 응답 형식입니다: {str(payload)[:200]}"
                 )
 
-            body = response.get("body") or {}
-            items_wrap = body.get("items") or {}
-            items = items_wrap.get("item") if isinstance(items_wrap, dict) else items_wrap
-            if items is None:
-                items = []
-            if isinstance(items, dict):
-                items = [items]
+            meta = payload[0] if isinstance(payload[0], dict) else {}
+            result_code = str(meta.get("resultCode") or "").strip()
+            if result_code not in ("00", "0", ""):
+                raise DataGoKrError(
+                    f"공공 API 오류: code={result_code} msg={meta.get('resultMsg')}"
+                )
+
+            items = [it for it in payload[1:] if isinstance(it, dict)]
 
             for it in items:
-                x = _to_float(it.get("X_COORD") or it.get("x_coord"))
-                y = _to_float(it.get("Y_COORD") or it.get("y_coord"))
+                x = _coord_int_to_deg(it.get("X_COORD") or it.get("x_coord"))
+                y = _coord_int_to_deg(it.get("Y_COORD") or it.get("y_coord"))
                 int_no = str(it.get("INT_NO") or it.get("int_no") or "").strip()
                 if x is None or y is None or not int_no:
                     continue
@@ -109,7 +118,7 @@ async def fetch_crossroads(
                     y_coord=y,
                 )
 
-            total = int(body.get("totalCount") or 0)
+            total = int(meta.get("totalCount") or 0)
             if page_no * page_size >= total or not items:
                 break
             page_no += 1

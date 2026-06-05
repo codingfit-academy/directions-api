@@ -63,6 +63,18 @@ class RouteRequest(BaseModel):
     )
 
 
+class RealtimeTraffic(BaseModel):
+    """서울 TOPIS 기반 실시간 도로 소통 요약."""
+    sample_count: int
+    avg_speed_kmh: float
+    timestamp: Optional[str] = None
+    congestion: str = Field(description="원활/서행/지정체/정체")
+    eta_factor: float = Field(
+        default=1.0,
+        description="ETA에 적용된 실시간 보정 계수 (>1: ETA 증가, <1: 감소)",
+    )
+
+
 class RouteResponse(BaseModel):
     origin: GeocodeOut
     destination: GeocodeOut
@@ -76,6 +88,9 @@ class RouteResponse(BaseModel):
     )
     signal_delay_estimate_s: int = Field(
         default=0, description="경로 상 신호등 cycle_time의 절반을 합산한 예상 대기 시간(초)"
+    )
+    realtime_traffic: Optional[RealtimeTraffic] = Field(
+        default=None, description="서울 실시간 도로 소통 요약 (Seoul OpenAPI 키 설정 시)"
     )
 
 
