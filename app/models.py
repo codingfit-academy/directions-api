@@ -6,7 +6,18 @@ SQLAlchemy 모델
 from datetime import datetime
 
 from geoalchemy2 import Geometry
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -51,3 +62,56 @@ class Signal(Base):
         UniqueConstraint("source", "source_id", name="uq_signal_source"),
         Index("ix_signals_geom", "geom", postgresql_using="gist"),
     )
+
+
+class User(Base):
+    """이메일/비밀번호 기반 사용자 계정."""
+    __tablename__ = "users"
+
+    id: Mapped[int]              = mapped_column(Integer, primary_key=True)
+    email: Mapped[str]           = mapped_column(String(255), nullable=False, unique=True, index=True)
+    username: Mapped[str]        = mapped_column(String(64), nullable=False, unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class GpsTrip(Base):
+    """
+    앱이 하나의 이동(출발~도착)을 시작~종료할 때 생성하는 단위.
+
+    노이즈 제거·ST-DBSCAN 정지 클러스터링·ETA 피처 계산은 이후 단계에서
+    이 trip에 연결되는 별도 테이블/배치 작업으로 추가된다.
+    """
+    __tablename__ = "gps_trips"
+
+    id: Mapped[int]         = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int]    = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    label: Mapped[str]      = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    ended_at: Mapped[datetime]   = mapped_column(DateTime(timezone=True), nullable=True)
+    origin_lat: Mapped[float]    = mapped_column(Float, nullable=True)
+    origin_lng: Mapped[float]    = mapped_column(Float, nullable=True)
+    dest_lat: Mapped[float]      = mapped_column(Float, nullable=True)
+    dest_lng: Mapped[float]      = mapped_column(Float, nullable=True)
+    target_arrival_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str]     = mapped_column(String(16), nullable=False, default="active")
+    # status: active(수집 중) / completed(종료) / discarded(폐기)
+
+
+class GpsPoint(Base):
+    """원시 GPS 포인트 (노이즈 제거 전). 좌표는 EPSG:4326(WGS84)으로 저장."""
+    __tablename__ = "gps_points"
+
+    id: Mapped[int]         = mapped_column(Integer, primary_key=True)
+    trip_id: Mapped[int]    = mapped_column(Integer, ForeignKey("gps_trips.id"), nullable=False, index=True)
+    geom: Mapped[object]    = mapped_column(
+        Geometry(geometry_type="POINT", srid=4326), nullable=False
+    )
+    speed_mps: Mapped[float]   = mapped_column(Float, nullable=True)
+    accuracy_m: Mapped[float]  = mapped_column(Float, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_noise: Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)

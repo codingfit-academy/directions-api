@@ -84,3 +84,10 @@ SEOUL_TOPIS_LINK_IDS = _val("SEOUL_TOPIS_LINK_IDS", "1220003800")
 # 본 앱은 '근거리 신호등 정보를 통한 최단시간 보행'이 목적이라
 # 출발지~도착지 직선거리 상한을 둔다. (Haversine 미터)
 MAX_ROUTE_DISTANCE_M = int(_val("MAX_ROUTE_DISTANCE_M", "2000"))
+
+# ── 인증 (JWT) ──────────────────────────────────────────────
+# 학원 환경 기본값 — 운영 배포 시에는 반드시 환경변수로 교체하세요.
+JWT_SECRET_KEY = _val("JWT_SECRET_KEY", "change-this-secret-in-production-9f8a3d7c1b")
+JWT_ALGORITHM = _val("JWT_ALGORITHM", "HS256")
+# 모바일 앱 특성상 재로그인 부담을 줄이기 위해 기본 30일로 설정 (refresh token 없음).
+JWT_EXPIRE_MINUTES = int(_val("JWT_EXPIRE_MINUTES", str(60 * 24 * 30)))

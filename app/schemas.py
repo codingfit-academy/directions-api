@@ -1,9 +1,10 @@
 """
 Pydantic 응답/요청 스키마
 """
+from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class SignalOut(BaseModel):
@@ -100,3 +101,82 @@ class RouteResponse(BaseModel):
 
 
 RouteResponse.model_rebuild()
+
+
+# ── 인증 ───────────────────────────────────────────────────────
+class UserCreate(BaseModel):
+    email: EmailStr
+    username: str = Field(min_length=2, max_length=64)
+    password: str = Field(min_length=8, description="8자 이상")
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    username: str
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+# ── GPS 궤적 수집 ─────────────────────────────────────────────
+class GpsTripCreate(BaseModel):
+    label: Optional[str] = Field(
+        default=None, max_length=100, description="기록 이름 (예: '퇴근길 산책'). 앱의 '기록하기' 화면에서 씀"
+    )
+    origin_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    origin_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    dest_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    dest_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    target_arrival_at: Optional[datetime] = Field(
+        default=None, description="목표 도착 시각 (ETA/출발 추천 계산에 사용, 이후 단계에서 구현)"
+    )
+
+
+class GpsTripOut(BaseModel):
+    id: int
+    user_id: int
+    label: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    origin_lat: Optional[float] = None
+    origin_lng: Optional[float] = None
+    dest_lat: Optional[float] = None
+    dest_lng: Optional[float] = None
+    target_arrival_at: Optional[datetime] = None
+    status: str
+    model_config = {"from_attributes": True}
+
+
+class GpsPointIn(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    speed_mps: Optional[float] = Field(default=None, ge=0, description="기기가 제공하는 순간 속도(m/s), 없으면 null")
+    accuracy_m: Optional[float] = Field(default=None, ge=0, description="위치 정확도 반경(m)")
+    recorded_at: datetime = Field(description="기기에서 측정한 시각 (timezone 포함 권장)")
+
+
+class GpsPointsUploadRequest(BaseModel):
+    points: List[GpsPointIn] = Field(min_length=1, max_length=500)
+
+
+class GpsPointsUploadResult(BaseModel):
+    trip_id: int
+    inserted: int
+
+
+class GpsTripFinishResult(BaseModel):
+    trip_id: int
+    status: str
+    point_count: int
+    ended_at: datetime
