@@ -8,3 +8,6 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
+
+# ETA 예측 모델 아티팩트 (POST /eta/train으로 로컬에서 재생성됨)
+app/ml_models/

@@ -151,40 +151,47 @@ class GpsPoint(Base):
 > 필요해지면 그때 PostGIS 컬럼으로 옮기면 된다.
 
 ```python
-# app/models.py 에 추가 예정 (2~3단계, 아직 미구현)
+# app/models.py — 구현 완료 (2~3단계)
 
 class StopCluster(Base):
-    """ST-DBSCAN으로 탐지된 정지 구간."""
+    """ST-DBSCAN으로 탐지된 정지 구간 (trip 종료 시 gps_processing.py가 생성)."""
     __tablename__ = "stop_clusters"
 
     id: Mapped[int]         = mapped_column(Integer, primary_key=True)
-    trip_id: Mapped[int]    = mapped_column(Integer, ForeignKey("gps_trips.id"), index=True)
-    center_geom: Mapped[object] = mapped_column(Geometry("POINT", srid=4326))
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    ended_at: Mapped[datetime]   = mapped_column(DateTime(timezone=True))
-    duration_s: Mapped[int]      = mapped_column(Integer)
-    matched_signal_id: Mapped[int] = mapped_column(ForeignKey("signals.id"), nullable=True)
+    trip_id: Mapped[int]    = mapped_column(Integer, ForeignKey("gps_trips.id"), nullable=False, index=True)
+    center_geom: Mapped[object] = mapped_column(Geometry(geometry_type="POINT", srid=4326), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime]   = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_s: Mapped[int]      = mapped_column(Integer, nullable=False)
+    point_count: Mapped[int]     = mapped_column(Integer, nullable=False)
+    matched_signal_id: Mapped[int] = mapped_column(Integer, ForeignKey("signals.id"), nullable=True)
+    matched_signal_distance_m: Mapped[float] = mapped_column(Float, nullable=True)
 
 
 class TripSegmentFeature(Base):
-    """ETA 모델 학습/추론용 trip 단위 피처 + 실측 라벨."""
+    """ETA 모델 학습/추론용 trip 단위 피처 (trip마다 1행, upsert)."""
     __tablename__ = "trip_segment_features"
 
-    id: Mapped[int]           = mapped_column(Integer, primary_key=True)
-    trip_id: Mapped[int]      = mapped_column(Integer, ForeignKey("gps_trips.id"), unique=True)
-    distance_m: Mapped[float]
-    moving_time_s: Mapped[int]
-    stopped_time_s: Mapped[int]
-    stop_count: Mapped[int]
-    avg_speed_mps: Mapped[float]
-    signal_count_on_route: Mapped[int]  = mapped_column(nullable=True)
-    hour_of_day: Mapped[int]
-    day_of_week: Mapped[int]
-    actual_duration_s: Mapped[int]      = mapped_column(nullable=True)  # 학습 라벨
+    id: Mapped[int]         = mapped_column(Integer, primary_key=True)
+    trip_id: Mapped[int]    = mapped_column(Integer, ForeignKey("gps_trips.id"), nullable=False, unique=True)
+    distance_m: Mapped[float]        = mapped_column(Float, nullable=False)
+    actual_duration_s: Mapped[int]   = mapped_column(Integer, nullable=False)  # 학습 라벨
+    moving_time_s: Mapped[int]       = mapped_column(Integer, nullable=False)
+    stopped_time_s: Mapped[int]      = mapped_column(Integer, nullable=False)
+    stop_count: Mapped[int]          = mapped_column(Integer, nullable=False)
+    signal_stop_count: Mapped[int]   = mapped_column(Integer, nullable=False)
+    avg_speed_mps: Mapped[float]     = mapped_column(Float, nullable=False)
+    hour_of_day: Mapped[int]         = mapped_column(Integer, nullable=False)   # Asia/Seoul 기준
+    day_of_week: Mapped[int]         = mapped_column(Integer, nullable=False)   # 0=월...6=일
+    computed_at: Mapped[datetime]    = mapped_column(DateTime(timezone=True), server_default=func.now())
 ```
 
 `StopCluster.matched_signal_id`로 기존 `signals`(신호등) 테이블과 연결해, "이 정지가
-실제 신호등 대기였는지" 판별할 수 있게 한다 — 기존 `ST_DWithin` 매칭 로직을 재사용.
+실제 신호등 대기였는지" 판별한다 — 기존 `ST_DWithin` 매칭 로직을 재사용.
+`TripSegmentFeature.signal_stop_count`는 원래 초안의 `signal_count_on_route`(경로
+전체의 신호등 개수) 대신, 실제로 감지된 정지 구간 중 신호등과 매칭된 개수로
+구현했다 — 별도 route 정보 없이 이미 계산된 stop_clusters에서 바로 집계할 수
+있어서다.
 
 ## 4. API 엔드포인트
 
@@ -200,38 +207,59 @@ class TripSegmentFeature(Base):
 | GET | `/gps/trips` | 로그인한 사용자의 trip 목록 (최신순). 앱의 "이전 기록 불러오기"용 | 완료 |
 | GET | `/gps/trips/{id}` | trip 상태 조회 (본인 소유만) | 완료 |
 | POST | `/gps/trips/{id}/points` | GPS 포인트 배치 업로드 (앱이 주기적으로 호출) | 완료 |
-| POST | `/gps/trips/{id}/finish` | trip 종료 → 현재는 point 개수 집계까지만. 전처리·클러스터링·피처 계산은 미구현 | 완료(수집만) |
-| GET | `/eta/predict` | 현재 위치 + 목적지 + 목표 도착시각 → 예상 소요시간, 정시 도착 확률 | 미구현 (4단계) |
-| GET | `/eta/departure-recommendation` | 위 확률 기반 출발 상태 문구 반환 | 미구현 (5단계) |
+| POST | `/gps/trips/{id}/finish` | trip 종료 → 노이즈 제거·ST-DBSCAN·피처 계산을 백그라운드로 트리거 | 완료 |
+| GET | `/gps/trips/{id}/stops` | 탐지된 정지 구간 목록 (디버깅/확인용) | 완료 |
+| GET | `/gps/trips/{id}/features` | 속도/거리/정지 등 ETA 학습용 피처 (디버깅/확인용) | 완료 |
+| POST | `/eta/train` | trip_segment_features로 XGBoost 분위수 회귀 population 모델 재학습 | 완료 |
+| GET | `/eta/predict` | 현재 위치 + 목적지 + 목표 도착시각 → 예상 소요시간(p10/p50/p90), 정시 도착 확률 | 완료 |
+| GET | `/eta/departure-recommendation` | 위 확률 기반 출발 상태 문구 반환 | 완료 |
 
 `/gps/*` 엔드포인트는 모두 `Authorization: Bearer <token>` 필요. trip 소유자가
 아니면 403을 반환한다 (`app/routers/gps.py`의 `_get_own_trip_or_404`).
 
 ## 5. ML 파이프라인 설계
 
-**1차 (baseline, XGBoost)**
-- 입력 피처: 직선/경로 거리, 요일·시간대, 신호등 개수 및 예상 대기시간
-  (기존 `signal_delay_estimate_s` 로직 재사용), 사용자별 동일/유사 경로 과거 평균 속도,
-  최근 실시간 교통 보정 계수(`RealtimeTraffic.eta_factor`, driving 모드).
+**1차 (baseline, XGBoost) — 구현 완료 (`app/services/eta_model.py`)**
+- 입력 피처(실제 구현): `distance_m`, `hour_of_day`/`day_of_week`(Asia/Seoul 기준),
+  이력 평균속도(`historical_avg_speed_mps` — 개인+기록이름 → population → 기본값
+  1.2m/s 순으로 폴백, 어느 단계였는지는 `historical_source` 0/1/2로 별도 피처화),
+  이력 평균 정지 횟수(`historical_avg_stop_count`, population 기준).
+  원래 초안의 "신호등 개수/실시간 교통 보정"은 이번 baseline에서는 빠졌다 — route
+  정보 없이 이미 계산된 `trip_segment_features`만으로 구성했다.
 - 라벨: 실측 `actual_duration_s`.
-- 장점: 적은 데이터로도 학습 가능, 해석 가능(feature importance), 콜드스타트에 강함.
+- 학습: `POST /eta/train`이 `trip_segment_features` + `gps_trips`를 조인해
+  전체 사용자 데이터로 population 모델 하나를 재학습한다 (사용자별 별도 모델 아님 —
+  개인화는 "이력 평균속도" 피처를 통해서만 반영됨). 표본이 `ETA_MIN_TRAINING_SAMPLES`
+  (기본 20건) 미만이면 학습을 거부한다.
+- **데이터 누수 방지**: 각 학습 행의 "이력 평균속도/정지횟수"는 해당 trip의
+  `started_at` *이전에* 완료된 trip만으로 계산한다 (SQL 상관 서브쿼리). 이걸
+  안 했으면 모델이 답을 몰래 참조하는 꼴이라 실제로는 못 쓰는 모델이 나옴.
+- **콜드스타트(모델 자체가 없을 때)**: `GET /eta/predict`는 학습된 모델 파일이
+  없으면 "거리 ÷ 이력평균속도 + 정지횟수 × 기본 대기시간(20초)" 규칙 기반으로
+  대체한다 — 데이터가 하나도 없어도 항상 응답은 준다.
+- **분위수 교차(quantile crossing) 처리**: `reg:quantileerror`로 p10/p50/p90을
+  한 번에 학습하는데, 표본이 적으면 순서가 뒤집히는 경우가 실제로 관찰됐다
+  (검증 스크립트로 확인). 예측값을 정렬해서 단조성을 강제하는 방식으로 대응했다 —
+  개별 분위수의 미세한 정확도보다 순서 보장을 우선함.
 
-**2차 (확장, LSTM)**
+**2차 (확장, LSTM) — 미착수**
 - 입력: 정규화된 GPS 궤적 시퀀스(구간별 속도·정지 패턴) — trip 내부 시계열 처리
 - 목적: XGBoost가 못 잡는 "사람마다 다른 이동 습관(예: 신호 무시하고 빨리 건너는지,
   중간에 매번 들르는 곳이 있는지)" 같은 시퀀스 패턴 학습.
 - 데이터가 충분히 쌓이기 전(사용자당 최소 수십 회 이동 기록)에는 XGBoost 단독 사용,
   이후 앙상블 또는 대체.
 
-**정시 도착 확률 산출**
-- 회귀 모델의 점추정치만으로는 확률을 못 구하므로, quantile regression
-  (XGBoost `reg:quantileerror` 또는 별도 분위수 모델) 또는 예측 오차의 경험적 분포를
-  이용해 `P(실제 소요시간 ≤ 남은시간)` 을 근사한다.
+**정시 도착 확률 산출 — 구현 완료**
+- 분위수 3점(p10/p50/p90)을 CDF의 앵커점으로 보고 선형 보간/외삽해
+  `P(실제 소요시간 ≤ 남은시간)`을 근사한다 (`_cdf_from_quantiles`). 표본이 적을
+  때는 부정확할 수 있으나 데이터가 쌓일수록 분위수 추정과 함께 개선된다.
 
-**콜드스타트 대응**
-- 신규 사용자/신규 경로: 개인 이력이 없으면 population 모델(전체 사용자 평균) →
-  이력이 쌓이면 개인화 모델로 점차 가중치 이동 (예: 베이지안 shrinkage 또는
-  간단한 가중평균 `w * personal + (1-w) * population`, w는 이력 횟수에 비례).
+**콜드스타트 대응 (개인화) — 구현 완료, 초안과 다른 방식**
+- 원래 초안은 "베이지안 shrinkage/가중평균으로 개인 모델과 population 모델을
+  섞는" 방식을 가정했지만, 실제로는 **모델을 하나만 두고 개인 이력을 피처로
+  주입**하는 더 단순한 방식으로 구현했다 (개인 이력 있으면 그 값, 없으면 population
+  평균, 그것도 없으면 기본값 — `historical_source`로 어느 단계인지 모델에 알려줌).
+  사용자당 수십 건이 쌓이기 전까지는 이 방식이 학습/운영 모두 더 안정적이라 판단.
 
 ## 6. Flutter 앱 요구사항
 
@@ -246,6 +274,10 @@ class TripSegmentFeature(Base):
   종료되면 유실된다. SQLite/Hive 영속 큐는 미구현.
 - 배터리 최적화: `distanceFilter: 5m`로 불필요한 업데이트는 억제했지만, 정지 감지 시
   간격을 더 늘리는 적응형 로직은 아직 없음.
+- [x] **정지 중 포인트 부족 문제 수정**: `distanceFilter: 5m`이면 실제로 멈춰
+  있을 때(신호 대기 등) 위치 스트림이 새 값을 안 보내, 서버의 ST-DBSCAN이
+  요구하는 최소 포인트 수(min_pts)를 못 채울 수 있었다. `TripRecordingController`에
+  15초마다 현재 위치를 강제로 한 번씩 찍는 하트비트 타이머를 추가해 해결.
 - [ ] 목표 도착 시각 입력 UI, ETA/추천 결과 표시 화면, 알림 — `/eta/*` API가
   없어서 아직 미구현.
 
@@ -254,16 +286,70 @@ class TripSegmentFeature(Base):
 1. ✅ **데이터 수집 파이프라인** — `User`/`GpsTrip`/`GpsPoint` 테이블, 인증(JWT) +
    업로드 API, Flutter 로그인/추적 화면까지 구현 완료. 실 데이터 축적을 시작할 수
    있는 상태. (백그라운드 트래킹·로컬 큐잉은 남음 — 6절 참고)
-2. **전처리 + ST-DBSCAN** — 노이즈 제거, 정지 클러스터링 배치 잡, `StopCluster` 저장,
-   기존 `signals` 테이블과 매칭
-3. **속도/거리 계산 + 피처 저장** — `TripSegmentFeature` 생성 로직
-4. **ETA baseline (XGBoost)** — 학습 스크립트, 모델 아티팩트 저장/서빙,
-   `/eta/predict` 엔드포인트
-5. **출발 추천 로직** — 확률 임계값 매핑, `/eta/departure-recommendation`,
-   앱 알림 연동
-6. **LSTM 고도화** — 데이터량 확보 후 순차 착수, XGBoost와 비교/앙상블
+2. ✅ **전처리 + ST-DBSCAN** — 노이즈 제거, 정지 클러스터링, `StopCluster` 저장,
+   기존 `signals` 테이블과 매칭까지 구현 완료 (`app/services/gps_processing.py`).
+   trip 종료(`POST /gps/trips/{id}/finish`) 시 백그라운드로 자동 실행되고,
+   결과는 `GET /gps/trips/{id}/stops`로 확인 가능. 순수 함수(노이즈 제거,
+   ST-DBSCAN)는 합성 시나리오로 동작 검증 완료 — 다만 실제 DB(PostGIS)에 연결한
+   end-to-end 테스트는 이 환경에 Docker/로컬 PostGIS가 없어 못 했음 (1단계와 동일한
+   제약, 10절 참고).
+3. ✅ **속도/거리 계산 + 피처 저장** — `TripSegmentFeature` 생성 로직 구현 완료
+   (`app/services/gps_processing.py`의 `_compute_and_store_feature`). trip
+   종료 시 정지 클러스터링 직후 같은 백그라운드 작업에서 실행되어
+   `trip_segment_features`에 upsert되고, `GET /gps/trips/{id}/features`로
+   확인 가능. 계산 항목: 누적 거리(노이즈 제거 후 GPS 궤적), 실측
+   소요시간·이동시간·정지시간, 정지 횟수·신호등 매칭 정지 횟수, 평균 속도,
+   출발 시각의 시간대·요일(Asia/Seoul 기준). `_total_distance_m` 순수 함수는
+   단위 검증 완료.
+4. ✅ **ETA baseline (XGBoost)** — `POST /eta/train`(재학습), `GET /eta/predict`
+   (p10/p50/p90 + 정시 도착 확률) 구현 완료. **아직 실제 학습 데이터가 없어
+   검증은 못 했음** — 순수 함수(이력 폴백, CDF 근사, 휴리스틱)와 XGBoost 분위수
+   회귀 자체의 동작(합성 데이터)만 확인. 데이터가 쌓이면 `POST /eta/train` 호출
+   후 `GET /eta/predict`로 실제 정확도를 봐야 함. 앱(Flutter)에는 아직 연결 안 됨.
+5. ✅ **출발 추천 로직** — `recommend_departure()`가 정시 도착 확률을
+   `comfortable`/`on_time`/`urgent`/`late` 4단계(문구: "여유 있는 출발"/"정시
+   출발"/"늦어도 지금은 출발"/"이미 늦음")로 매핑, `GET /eta/departure-recommendation`
+   구현 완료. 임계값 경계값(0.9/0.6/0.3) 양쪽 다 검증 완료. 임계값은 실측
+   데이터 없이 정한 가정치라 데이터가 쌓이면 보정 필요.
+   **앱 연동도 완료**: `lib/features/eta/`(domain/data/presentation) 신규 추가,
+   `trip_tracking_page.dart`의 "출발" 시 이 API를 30초마다 호출해 카드로 표시
+   (`label`만 넘기고 좌표는 안 줌 — 서버가 기록 이름 기준 과거 평균 거리로
+   대신 계산하도록 `eta_model.py`에 `_resolve_distance_m` 폴백을 추가했다).
+   기존 로컬 타이머 기반 경고는 그대로 두고, AI 추천은 별도 카드로 나란히
+   보여준다. 표본이 적거나(<20건) heuristic일 때는 "아직 기록이 적어 정확하지
+   않을 수 있어요" 안내를 함께 띄운다. `dart analyze`/`flutter test` 통과 —
+   단, 이 환경의 Android Studio JBR(java.exe)이 손상돼 있어 APK 빌드까지는
+   확인 못 했다 (Dart/Flutter 코드 자체 문제 아님, gradle의 JDK 탐색 문제).
+6. ✅ **LSTM 고도화 — 오프라인 벤치마크 파이프라인까지 구현 완료, 라이브 연결은 보류**
+   `app/services/eta_lstm.py`: trip GPS 시퀀스(`[delta_t_s, delta_dist_m, is_stop]`)를
+   패딩해 LSTM(분위수 회귀, `reg:quantileerror`와 같은 pinball loss)으로 학습하고,
+   `POST /eta/train-lstm`이 시간순 홀드아웃에서 XGBoost와 MAE를 비교해 돌려준다.
 
-데이터가 없으면 3~5단계 모델이 무의미하므로, 1~2단계를 먼저 끝내고 최소 몇 주간
+   **구현 중 발견한 중요한 설계 문제**: 원래 계획대로 "LSTM이 trip 시퀀스를
+   학습해 duration을 맞춘다"는 건, 출발 *전* 예측(`/eta/predict`)에는 그 trip의
+   시퀀스가 아직 존재하지 않아 그대로 쓸 수 없다. 그래서 지금은 **완료된 과거
+   trip들로 XGBoost 대비 정확도를 재보는 오프라인 벤치마크 용도로만** 구현했고,
+   `/eta/predict`/`/eta/departure-recommendation` 라이브 예측에는 연결하지 않았다.
+   벤치마크에서 LSTM이 확실히 더 낫고 표본도 충분해지면, 그다음 단계로 "사용자+
+   기록이름별 과거 시퀀스의 평균 임베딩"을 XGBoost 피처에 추가하는 식으로
+   라이브 연결을 고려할 수 있다 (아직 미구현 — 데이터도, 벤치마크 결과도 없어
+   지금 미리 만드는 건 시기상조라고 판단).
+
+   **또 하나 발견한 문제 — 배포 환경 호환성**: `torch`(그리고 이미 4단계에서
+   넣은 `xgboost`)는 Alpine(musl) wheel을 배포하지 않는다. 기존 `Dockerfile`이
+   Alpine 기반이라 그대로였으면 실제 배포에서 설치가 안 됐을 것 — 이번에
+   `python:3.11-slim-bookworm`(Debian, glibc)으로 전환했다 (Docker가 이 환경에
+   없어 실제 빌드 검증은 못 했음, 직접 확인 필요). `torch`는 여전히 무겁고
+   지금은 오프라인 벤치마크에만 쓰이므로 `requirements.txt`(Docker 이미지에
+   포함)가 아니라 `requirements-optional.txt`로 분리했다 — 설치 안 해도 기본
+   API는 정상 동작하고, `/eta/train-lstm`만 501을 반환한다 (torch를 가짜로
+   차단한 상태에서 앱 전체 임포트 + HTTP 501 응답까지 실제로 검증함).
+
+   학습 루프 자체(패딩, LSTM forward, pinball loss, 정렬 기반 분위수 교차 방지)는
+   합성 데이터로 검증 완료. 학습률 0.01은 너무 느리게 수렴해 0.05로,
+   epoch도 60→200으로 올렸다 (그래도 실제 데이터로는 다시 튜닝 필요).
+
+데이터가 없으면 3~6단계 모델이 무의미하므로, 1~2단계를 먼저 끝내고 최소 몇 주간
 실사용 데이터를 모으는 기간을 계획에 넣는 것을 권장한다.
 
 ## 8. 기술 스택 추가 항목

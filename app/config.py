@@ -91,3 +91,60 @@ JWT_SECRET_KEY = _val("JWT_SECRET_KEY", "change-this-secret-in-production-9f8a3d
 JWT_ALGORITHM = _val("JWT_ALGORITHM", "HS256")
 # 모바일 앱 특성상 재로그인 부담을 줄이기 위해 기본 30일로 설정 (refresh token 없음).
 JWT_EXPIRE_MINUTES = int(_val("JWT_EXPIRE_MINUTES", str(60 * 24 * 30)))
+
+# ── GPS 궤적 전처리 (노이즈 제거 · ST-DBSCAN 정지 클러스터링) ────
+# trip 종료(POST /gps/trips/{id}/finish) 시 백그라운드로 실행된다.
+# GPS 포인트 정확도 반경이 이보다 나쁘면(미터) 노이즈로 버린다.
+GPS_MAX_ACCURACY_M = float(_val("GPS_MAX_ACCURACY_M", "50"))
+# 직전 유효 포인트 대비 이동속도가 이보다 크면(m/s) 튀는 값으로 보고 버린다.
+# 15m/s ≒ 54km/h — 도보 앱이지만 GPS 튐/차량 탑승 구간을 감안해 여유를 둠.
+GPS_MAX_SPEED_MPS = float(_val("GPS_MAX_SPEED_MPS", "15"))
+# ST-DBSCAN 공간 반경(미터) — 이 안에 모여 있어야 "같은 자리"로 본다.
+ST_DBSCAN_EPS_SPACE_M = float(_val("ST_DBSCAN_EPS_SPACE_M", "15"))
+# ST-DBSCAN 시간 반경(초) — 공간 조건과 동시에 이 안에서 측정됐어야 이웃으로 본다.
+ST_DBSCAN_EPS_TIME_S = float(_val("ST_DBSCAN_EPS_TIME_S", "60"))
+# 정지로 인정하기 위한 최소 이웃 포인트 수 (자기 자신 포함).
+ST_DBSCAN_MIN_PTS = int(_val("ST_DBSCAN_MIN_PTS", "3"))
+# 클러스터의 체류시간이 이보다 짧으면(초) 정지로 인정하지 않는다 (신호 대기 등과
+# 구분하기 위한 최소 기준 — 너무 짧으면 그냥 서행/GPS 튐일 가능성이 높음).
+MIN_STOP_DURATION_S = int(_val("MIN_STOP_DURATION_S", "10"))
+# 정지 클러스터를 signals 테이블의 신호등과 매칭할 때 쓰는 반경(미터).
+STOP_SIGNAL_MATCH_BUFFER_M = int(_val("STOP_SIGNAL_MATCH_BUFFER_M", "30"))
+
+# ── ETA 예측 (XGBoost baseline) ──────────────────────────────
+# 학습된 모델 파일 저장 경로. POST /eta/train으로 재생성되는 산출물이라
+# git에는 커밋하지 않는다 (.gitignore 참고).
+ETA_MODEL_PATH = _val("ETA_MODEL_PATH", "app/ml_models/eta_xgb.json")
+# 이보다 학습 표본(완료된 trip)이 적으면 학습을 거부하고 휴리스틱으로만 예측한다.
+# 데이터가 거의 없는 초기 단계에서는 이 값을 낮춰 테스트할 수 있다.
+ETA_MIN_TRAINING_SAMPLES = int(_val("ETA_MIN_TRAINING_SAMPLES", "20"))
+# 개인/population 이력이 전혀 없을 때(콜드스타트) 쓰는 기본 도보 속도(m/s).
+ETA_DEFAULT_SPEED_MPS = float(_val("ETA_DEFAULT_SPEED_MPS", "1.2"))
+# 휴리스틱 예측에서 정지 1회당 더할 예상 대기시간(초) — 모델이 없을 때만 사용.
+ETA_DEFAULT_WAIT_PER_STOP_S = int(_val("ETA_DEFAULT_WAIT_PER_STOP_S", "20"))
+
+# ── 출발 추천 (정시 도착 확률 → 상태 문구) ────────────────────
+# 임계값은 가정치 — 실측 데이터가 쌓이면 실제 지각/여유 비율을 보고 보정 필요.
+# P >= COMFORTABLE           → "여유 있는 출발"
+# COMFORTABLE > P >= ON_TIME → "정시 출발"
+# ON_TIME > P >= URGENT      → "늦어도 지금은 출발"
+# P < URGENT                 → "이미 늦음"
+DEPARTURE_REC_THRESHOLD_COMFORTABLE = float(_val("DEPARTURE_REC_THRESHOLD_COMFORTABLE", "0.9"))
+DEPARTURE_REC_THRESHOLD_ON_TIME = float(_val("DEPARTURE_REC_THRESHOLD_ON_TIME", "0.6"))
+DEPARTURE_REC_THRESHOLD_URGENT = float(_val("DEPARTURE_REC_THRESHOLD_URGENT", "0.3"))
+
+# ── ETA 예측 (LSTM, 2차 확장 — 오프라인 벤치마크 전용) ────────────
+# torch가 설치돼 있을 때만 동작한다 (requirements-optional.txt 참고).
+# GPS 시퀀스를 직접 학습하는 만큼 XGBoost보다 더 많은 표본을 요구한다.
+ETA_LSTM_MIN_TRAINING_SAMPLES = int(_val("ETA_LSTM_MIN_TRAINING_SAMPLES", "50"))
+# 시퀀스 최대 길이(스텝 수) — 이보다 긴 trip은 앞부분만 잘라 쓴다.
+ETA_LSTM_MAX_SEQ_LEN = int(_val("ETA_LSTM_MAX_SEQ_LEN", "300"))
+ETA_LSTM_HIDDEN_SIZE = int(_val("ETA_LSTM_HIDDEN_SIZE", "32"))
+ETA_LSTM_EPOCHS = int(_val("ETA_LSTM_EPOCHS", "200"))
+# 합성 데이터로 실험한 결과 0.01은 너무 느리게 수렴해 기본값을 0.05로 올렸다 —
+# 실제 데이터로 학습해보면서 다시 튜닝이 필요할 수 있다.
+ETA_LSTM_LEARNING_RATE = float(_val("ETA_LSTM_LEARNING_RATE", "0.05"))
+ETA_LSTM_MODEL_PATH = _val("ETA_LSTM_MODEL_PATH", "app/ml_models/eta_lstm.pt")
+# 학습/평가 분할 비율 — 시간순 뒤쪽 일부를 홀드아웃으로 뗀다 (미래 데이터로
+# 평가하는 게 실제 배포 시나리오와 더 비슷해서 랜덤 셔플 대신 이렇게 한다).
+ETA_LSTM_HOLDOUT_RATIO = float(_val("ETA_LSTM_HOLDOUT_RATIO", "0.2"))

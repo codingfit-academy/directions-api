@@ -180,3 +180,76 @@ class GpsTripFinishResult(BaseModel):
     status: str
     point_count: int
     ended_at: datetime
+
+
+class StopClusterOut(BaseModel):
+    id: int
+    trip_id: int
+    lat: float
+    lng: float
+    started_at: datetime
+    ended_at: datetime
+    duration_s: int
+    point_count: int
+    matched_signal_id: Optional[int] = None
+    matched_signal_distance_m: Optional[float] = None
+    model_config = {"from_attributes": True}
+
+
+class EtaTrainResult(BaseModel):
+    trained: bool = Field(description="학습이 실제로 수행됐는지 (표본 부족 시 false)")
+    sample_count: int = Field(description="학습에 사용된(또는 부족했던) 완료 trip 수")
+    reason: Optional[str] = Field(default=None, description="trained=false일 때 사유")
+
+
+class EtaPredictResult(BaseModel):
+    predicted_duration_s: int = Field(description="예상 소요시간(중앙값, 초)")
+    duration_p10_s: int = Field(description="낙관적 추정(하위 10%, 초)")
+    duration_p90_s: int = Field(description="비관적 추정(상위 90%, 초)")
+    on_time_probability: Optional[float] = Field(
+        default=None, description="target_arrival_at을 지정했을 때만 채워짐 (0~1)"
+    )
+    model_source: str = Field(
+        description="'model'(학습된 XGBoost 분위수 회귀) 또는 'heuristic'(데이터 부족 시 규칙 기반)"
+    )
+    sample_count: int = Field(description="예측에 쓰인 population 학습 표본 수 (모델 학습 시점 기준)")
+
+
+class EtaLstmBenchmarkOut(BaseModel):
+    trained: bool = Field(description="학습이 실제로 수행됐는지 (표본/시퀀스 부족 시 false)")
+    sample_count: int = Field(description="유효한 GPS 시퀀스가 있는 완료 trip 수")
+    train_count: int = Field(default=0, description="학습에 쓰인 수 (시간순 앞쪽)")
+    holdout_count: int = Field(default=0, description="평가에 쓰인 수 (시간순 뒤쪽)")
+    lstm_mae_s: Optional[float] = Field(default=None, description="LSTM 홀드아웃 평균 절대 오차(초)")
+    xgb_mae_s: Optional[float] = Field(
+        default=None, description="같은 홀드아웃에서 XGBoost 평균 절대 오차(초). 모델 없으면 null"
+    )
+    reason: Optional[str] = Field(default=None, description="trained=false일 때 사유")
+
+
+class DepartureRecommendationOut(BaseModel):
+    status: str = Field(
+        description="'comfortable' / 'on_time' / 'urgent' / 'late' — 앱에서 분기 처리용"
+    )
+    message: str = Field(description="사람이 읽을 문구 (예: '여유 있는 출발')")
+    on_time_probability: float = Field(description="목표 시각까지 도착할 확률 (0~1)")
+    remaining_s: int = Field(description="목표 도착 시각까지 남은 시간(초). 음수면 이미 지남")
+    predicted_duration_s: int
+    duration_p10_s: int
+    duration_p90_s: int
+    model_source: str
+    sample_count: int
+
+
+class TripFeatureOut(BaseModel):
+    trip_id: int
+    distance_m: float = Field(description="노이즈 제거 후 GPS 궤적 누적 거리(m)")
+    actual_duration_s: int = Field(description="trip 시작~종료 실측 소요시간(초)")
+    moving_time_s: int
+    stopped_time_s: int
+    stop_count: int = Field(description="ST-DBSCAN으로 탐지된 정지 구간 수")
+    signal_stop_count: int = Field(description="정지 구간 중 신호등과 매칭된 개수")
+    avg_speed_mps: float = Field(description="이동 시간 기준 평균 속도(m/s)")
+    hour_of_day: int = Field(description="출발 시각 (Asia/Seoul 기준, 0-23)")
+    day_of_week: int = Field(description="출발 요일 (0=월 ... 6=일, Asia/Seoul 기준)")
+    model_config = {"from_attributes": True}

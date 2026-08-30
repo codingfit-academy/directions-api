@@ -81,8 +81,9 @@ class GpsTrip(Base):
     """
     앱이 하나의 이동(출발~도착)을 시작~종료할 때 생성하는 단위.
 
-    노이즈 제거·ST-DBSCAN 정지 클러스터링·ETA 피처 계산은 이후 단계에서
-    이 trip에 연결되는 별도 테이블/배치 작업으로 추가된다.
+    trip 종료 시 app/services/gps_processing.py가 노이즈 제거·ST-DBSCAN 정지
+    클러스터링을 수행해 StopCluster를 생성한다. 속도/거리 계산·ETA 피처 저장은
+    이후 단계에서 추가된다.
     """
     __tablename__ = "gps_trips"
 
@@ -115,3 +116,56 @@ class GpsPoint(Base):
     accuracy_m: Mapped[float]  = mapped_column(Float, nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_noise: Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
+
+
+class StopCluster(Base):
+    """
+    ST-DBSCAN으로 탐지된 정지 구간 (trip 종료 시 app/services/gps_processing.py가 생성).
+
+    matched_signal_id로 signals(신호등) 테이블과 연결해, 이 정지가 실제 신호
+    대기였는지 판별할 수 있게 한다.
+    """
+    __tablename__ = "stop_clusters"
+
+    id: Mapped[int]         = mapped_column(Integer, primary_key=True)
+    trip_id: Mapped[int]    = mapped_column(Integer, ForeignKey("gps_trips.id"), nullable=False, index=True)
+    center_geom: Mapped[object] = mapped_column(
+        Geometry(geometry_type="POINT", srid=4326), nullable=False
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime]   = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_s: Mapped[int]      = mapped_column(Integer, nullable=False)
+    point_count: Mapped[int]     = mapped_column(Integer, nullable=False)
+    matched_signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=True
+    )
+    matched_signal_distance_m: Mapped[float] = mapped_column(Float, nullable=True)
+
+
+class TripSegmentFeature(Base):
+    """
+    ETA 모델 학습/추론용 trip 단위 피처 (trip마다 1행). trip 종료 시 정지
+    클러스터링과 함께 app/services/gps_processing.py가 계산해 upsert한다.
+
+    actual_duration_s가 향후 ETA 회귀 모델의 학습 라벨이 되고, 나머지는 입력
+    피처가 된다.
+    """
+    __tablename__ = "trip_segment_features"
+
+    id: Mapped[int]         = mapped_column(Integer, primary_key=True)
+    trip_id: Mapped[int]    = mapped_column(
+        Integer, ForeignKey("gps_trips.id"), nullable=False, unique=True
+    )
+    distance_m: Mapped[float]        = mapped_column(Float, nullable=False)
+    actual_duration_s: Mapped[int]   = mapped_column(Integer, nullable=False)
+    moving_time_s: Mapped[int]       = mapped_column(Integer, nullable=False)
+    stopped_time_s: Mapped[int]      = mapped_column(Integer, nullable=False)
+    stop_count: Mapped[int]          = mapped_column(Integer, nullable=False)
+    signal_stop_count: Mapped[int]   = mapped_column(Integer, nullable=False)
+    avg_speed_mps: Mapped[float]     = mapped_column(Float, nullable=False)
+    hour_of_day: Mapped[int]         = mapped_column(Integer, nullable=False)
+    day_of_week: Mapped[int]         = mapped_column(Integer, nullable=False)
+    # day_of_week: Python datetime.weekday() 기준 (0=월 ... 6=일), Asia/Seoul 기준.
+    computed_at: Mapped[datetime]    = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

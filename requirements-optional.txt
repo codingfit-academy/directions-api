@@ -1,0 +1,11 @@
+# 선택 의존성 — LSTM 오프라인 벤치마크용 (app/services/eta_lstm.py).
+# 설치하지 않아도 기본 API(XGBoost 기반 /eta/predict, /eta/train 등)는 정상 동작한다.
+# torch가 없으면 /eta/train-lstm은 501로 "설치되어 있지 않다"고 응답만 한다.
+#
+# 설치 (CPU 전용 wheel — GPU 불필요):
+#   pip install -r requirements-optional.txt --extra-index-url https://download.pytorch.org/whl/cpu
+#
+# Docker 이미지(requirements.txt)에는 기본적으로 포함하지 않는다 — torch는
+# musllinux wheel이 없어 Alpine에서 설치가 안 될 수 있고(Debian slim으로
+# 전환한 지금도 이미지 용량이 커져 배포 필요성이 확실해지기 전까지는 제외).
+torch==2.13.0

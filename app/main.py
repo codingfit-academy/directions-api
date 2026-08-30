@@ -31,6 +31,7 @@ from .database import Base, enable_postgis, engine, get_db
 from .models import Item
 from .routers import auth as auth_router
 from .routers import directions as directions_router
+from .routers import eta as eta_router
 from .routers import gps as gps_router
 from .routers import signals as signals_router
 
@@ -121,6 +122,7 @@ app.include_router(auth_router.router)
 app.include_router(signals_router.router)
 app.include_router(directions_router.router)
 app.include_router(gps_router.router)
+app.include_router(eta_router.router)
 
 # ── 프론트용 공개 설정 (지도 API 키 등 — 브라우저에 노출되는 값만) ──
 @app.get("/config")

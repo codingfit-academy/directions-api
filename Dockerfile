@@ -1,35 +1,43 @@
 # ─────────────────────────────────────────────────────────────
 # templates/api-fastapi/Dockerfile
-# FastAPI — Python 3.11 Alpine, non-root, /health 엔드포인트
+# FastAPI — Python 3.11 Debian slim, non-root, /health 엔드포인트
 #
 # 서버는 PORT=8000 환경변수를 주입합니다.
 # app/main.py에 /health 엔드포인트 필수
+#
+# 원래 Alpine(musl) 기반이었으나 Debian slim(glibc)으로 전환했다 — xgboost 등
+# ETA 예측(app/services/eta_model.py)에 쓰는 ML 패키지가 musllinux wheel을
+# 배포하지 않아 Alpine에서는 설치가 안 되거나 소스 빌드가 필요해질 수 있어서다.
 # ─────────────────────────────────────────────────────────────
 
 # ── Stage 1: Builder ──────────────────────────────────────────
-FROM python:3.11-alpine AS builder
+FROM python:3.11-slim-bookworm AS builder
 WORKDIR /app
 
 # 빌드 의존성 설치
-RUN apk add --no-cache \
-    gcc \
-    musl-dev \
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    build-essential \
     libffi-dev \
-    postgresql-dev \
-    curl
+    libpq-dev \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
 
 # 의존성 설치 (prefix 방식으로 분리)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ── Stage 2: Runner ───────────────────────────────────────────
-FROM python:3.11-alpine AS runner
+FROM python:3.11-slim-bookworm AS runner
 WORKDIR /app
 
 # 런타임 라이브러리
-RUN apk add --no-cache libpq wget curl \
- && addgroup -g 1001 -S appgroup \
- && adduser  -u 1001 -S appuser -G appgroup
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    libpq5 \
+    wget \
+    curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 1001 appgroup \
+ && useradd -u 1001 -g appgroup -s /usr/sbin/nologin appuser
 
 # 설치된 패키지 복사
 COPY --from=builder /install /usr/local

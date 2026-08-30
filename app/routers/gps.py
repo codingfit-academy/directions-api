@@ -2,17 +2,19 @@
 GPS 궤적 수집 라우터. 모든 엔드포인트는 로그인이 필요하다.
 
 - POST /gps/trips             : 이동(trip) 시작
+- GET  /gps/trips             : trip 목록 조회
 - GET  /gps/trips/{id}        : trip 상태 조회
 - POST /gps/trips/{id}/points : GPS 포인트 배치 업로드 (앱이 주기적으로 호출)
-- POST /gps/trips/{id}/finish : 이동 종료 처리
+- POST /gps/trips/{id}/finish   : 이동 종료 처리 → 노이즈 제거 + ST-DBSCAN 정지
+                                   클러스터링 + 피처 계산을 백그라운드로 트리거
+- GET  /gps/trips/{id}/stops    : 위 클러스터링 결과 조회
+- GET  /gps/trips/{id}/features : 속도/거리/정지 등 ETA 학습용 피처 조회
 
-노이즈 제거 · ST-DBSCAN 정지 클러스터링 · ETA 피처 계산은 다음 단계에서
-trip 종료 후 비동기로 실행되는 배치 작업으로 추가된다 (현재는 원시 포인트
-적재와 개수 집계까지만 수행).
+ETA 예측 모델과 출발 추천 로직은 다음 단계에서 추가된다.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +27,10 @@ from ..schemas import (
     GpsTripCreate,
     GpsTripFinishResult,
     GpsTripOut,
+    StopClusterOut,
+    TripFeatureOut,
 )
+from ..services.gps_processing import process_trip
 
 _TRIP_COLUMNS = (
     "id, user_id, label, started_at, ended_at, origin_lat, origin_lng,"
@@ -153,6 +158,7 @@ async def upload_points(
 @router.post("/trips/{trip_id}/finish", response_model=GpsTripFinishResult)
 async def finish_trip(
     trip_id: int,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -183,9 +189,70 @@ async def finish_trip(
     ).mappings().first()
     await db.commit()
 
+    # 노이즈 제거 + ST-DBSCAN 정지 클러스터링은 응답 지연 없이 백그라운드로 실행.
+    background_tasks.add_task(process_trip, trip_id)
+
     return GpsTripFinishResult(
         trip_id=trip_id,
         status="completed",
         point_count=count_row["c"],
         ended_at=updated["ended_at"],
     )
+
+
+@router.get("/trips/{trip_id}/stops", response_model=list[StopClusterOut])
+async def list_stop_clusters(
+    trip_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """finish 이후 백그라운드 처리가 끝나면 채워지는 정지 구간 목록 (디버깅/확인용)."""
+    await _get_own_trip_or_404(db, trip_id, current_user.id)
+
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT id, trip_id,
+                       ST_Y(center_geom) AS lat, ST_X(center_geom) AS lng,
+                       started_at, ended_at, duration_s, point_count,
+                       matched_signal_id, matched_signal_distance_m
+                FROM stop_clusters
+                WHERE trip_id = :trip_id
+                ORDER BY started_at ASC
+                """
+            ),
+            {"trip_id": trip_id},
+        )
+    ).mappings().all()
+    return [StopClusterOut(**dict(r)) for r in rows]
+
+
+@router.get("/trips/{trip_id}/features", response_model=TripFeatureOut)
+async def get_trip_feature(
+    trip_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """finish 이후 백그라운드 처리가 끝나면 채워지는 ETA 학습용 피처 (디버깅/확인용)."""
+    await _get_own_trip_or_404(db, trip_id, current_user.id)
+
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT trip_id, distance_m, actual_duration_s, moving_time_s,
+                       stopped_time_s, stop_count, signal_stop_count, avg_speed_mps,
+                       hour_of_day, day_of_week
+                FROM trip_segment_features
+                WHERE trip_id = :trip_id
+                """
+            ),
+            {"trip_id": trip_id},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(
+            status_code=404, detail="아직 처리되지 않았거나 GPS 데이터가 없습니다."
+        )
+    return TripFeatureOut(**dict(row))
