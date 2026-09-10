@@ -200,6 +200,33 @@ def _total_distance_m(points: list[_Point]) -> float:
     )
 
 
+async def refresh_signal_stop_count(db: AsyncSession, trip_id: int) -> None:
+    """
+    사용자가 정지 구간을 신호등으로 확인해준 뒤, 이미 계산돼 있는 ETA 피처의
+    signal_stop_count만 다시 맞춘다.
+
+    거리/소요시간 등 나머지 피처는 GPS 원본이 그대로라 바뀌지 않으므로 전체
+    재계산 없이 이 컬럼만 갱신한다. 피처 행이 아직 없으면(=처리 전) 아무 것도
+    하지 않는다 — 나중에 process_trip이 돌 때 갱신된 라벨까지 반영해 계산한다.
+    """
+    await db.execute(
+        text(
+            """
+            UPDATE trip_segment_features f
+            SET signal_stop_count = (
+                    SELECT COUNT(*)
+                    FROM stop_clusters s
+                    WHERE s.trip_id = f.trip_id
+                      AND (s.matched_signal_id IS NOT NULL OR s.user_label = 'traffic_light')
+                ),
+                computed_at = NOW()
+            WHERE f.trip_id = :trip_id
+            """
+        ),
+        {"trip_id": trip_id},
+    )
+
+
 async def _compute_and_store_feature(
     db: AsyncSession, trip_id: int, kept_points: list[_Point]
 ) -> None:
@@ -225,7 +252,10 @@ async def _compute_and_store_feature(
             text(
                 """
                 SELECT COUNT(*) AS stop_count,
-                       COUNT(matched_signal_id) AS signal_stop_count,
+                       COUNT(*) FILTER (
+                           WHERE matched_signal_id IS NOT NULL
+                              OR user_label = 'traffic_light'
+                       ) AS signal_stop_count,
                        COALESCE(SUM(duration_s), 0) AS stopped_time_s
                 FROM stop_clusters
                 WHERE trip_id = :trip_id

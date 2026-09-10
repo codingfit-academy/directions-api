@@ -140,6 +140,12 @@ class StopCluster(Base):
         Integer, ForeignKey("signals.id"), nullable=True
     )
     matched_signal_distance_m: Mapped[float] = mapped_column(Float, nullable=True)
+    # 앱에서 사용자가 직접 확인해준 정지 사유. 'traffic_light' / 'elevator' / 'other'.
+    # 서버가 자동 매칭한 matched_signal_id와 달리 사람이 검증한 값이라, 향후 신호등
+    # DB 보정과 ETA 피처(대기 유형별 평균 대기시간)에 쓸 수 있다.
+    user_label: Mapped[str] = mapped_column(String(32), nullable=True)
+    # user_label == 'other'일 때 사용자가 직접 입력한 설명 (예: 육교, 계단).
+    user_label_text: Mapped[str] = mapped_column(String(100), nullable=True)
 
 
 class TripSegmentFeature(Base):

@@ -111,6 +111,20 @@ MIN_STOP_DURATION_S = int(_val("MIN_STOP_DURATION_S", "10"))
 # 정지 클러스터를 signals 테이블의 신호등과 매칭할 때 쓰는 반경(미터).
 STOP_SIGNAL_MATCH_BUFFER_M = int(_val("STOP_SIGNAL_MATCH_BUFFER_M", "30"))
 
+# 사용자가 정지 구간을 "신호등"이라고 확인해줬을 때, 그 좌표 주변에서 교차로를
+# 찾아볼 반경(미터). 자동 매칭(STOP_SIGNAL_MATCH_BUFFER_M)보다 넉넉하게 잡는다 —
+# 사람이 직접 신호등이라고 알려준 상황이라 근거가 더 강하고, 경찰청 데이터의
+# 교차로 좌표는 교차로 중심이라 횡단보도 대기 지점과 수십 m 떨어질 수 있다.
+SIGNAL_LOOKUP_BUFFER_M = int(_val("SIGNAL_LOOKUP_BUFFER_M", "120"))
+
+# 경찰청 신호 데이터는 서울만 제공된다 (2026-09 기준 재확인: 교차로기반정보서비스
+# 388건이 전부 REGION_CD=L01, 교차로계획정보서비스도 "서울시 교차로" 한정).
+# 그래서 서울 밖 좌표는 아예 외부 API를 부르지 않고 건너뛴다.
+SEOUL_BBOX_MIN_LAT = float(_val("SEOUL_BBOX_MIN_LAT", "37.41"))
+SEOUL_BBOX_MAX_LAT = float(_val("SEOUL_BBOX_MAX_LAT", "37.72"))
+SEOUL_BBOX_MIN_LNG = float(_val("SEOUL_BBOX_MIN_LNG", "126.76"))
+SEOUL_BBOX_MAX_LNG = float(_val("SEOUL_BBOX_MAX_LNG", "127.19"))
+
 # ── ETA 예측 (XGBoost baseline) ──────────────────────────────
 # 학습된 모델 파일 저장 경로. POST /eta/train으로 재생성되는 산출물이라
 # git에는 커밋하지 않는다 (.gitignore 참고).

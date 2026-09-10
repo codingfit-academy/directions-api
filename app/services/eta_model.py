@@ -338,11 +338,50 @@ def _cdf_from_quantiles(x: float, p10: float, p50: float, p90: float) -> float:
     return max(0.0, min(1.0, ys[i] + t * (ys[i + 1] - ys[i])))
 
 
+async def _resolve_wait_per_stop_s(
+    db: AsyncSession, user_id: int, label: Optional[str]
+) -> float:
+    """
+    정지 1회당 예상 대기시간(초)을 구한다.
+
+    사용자가 "신호등"이라고 확인해준 정지 구간에는 경찰청 교차로 데이터가 연결돼
+    있고(gps 라우터의 라벨 엔드포인트가 요청 시점에 조회해 붙인다), 그 신호등의
+    주기를 알면 평균 대기는 주기의 절반이다(임의의 시점에 도착한다고 보면).
+    주기를 아는 신호가 하나도 없으면 설정값(ETA_DEFAULT_WAIT_PER_STOP_S)으로 폴백한다.
+
+    ※ 신호 주기 데이터는 서울만 제공되므로, 서울 밖 기록은 자연히 폴백을 쓴다.
+    """
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT AVG(sig.cycle_time) AS avg_cycle_time
+                FROM stop_clusters s
+                JOIN gps_trips t ON t.id = s.trip_id
+                JOIN signals sig ON sig.id = s.matched_signal_id
+                WHERE t.user_id = :user_id
+                  AND t.label IS NOT DISTINCT FROM :label
+                  AND t.status = 'completed'
+                  AND sig.cycle_time IS NOT NULL
+                """
+            ),
+            {"user_id": user_id, "label": label},
+        )
+    ).mappings().first()
+
+    if row and row["avg_cycle_time"]:
+        return float(row["avg_cycle_time"]) / 2.0
+    return float(ETA_DEFAULT_WAIT_PER_STOP_S)
+
+
 def _heuristic_predict(
-    distance_m: float, historical_avg_speed_mps: float, historical_avg_stop_count: float
+    distance_m: float,
+    historical_avg_speed_mps: float,
+    historical_avg_stop_count: float,
+    wait_per_stop_s: float = float(ETA_DEFAULT_WAIT_PER_STOP_S),
 ) -> tuple[int, int, int]:
     """모델이 없을 때 쓰는 규칙 기반 추정 — 거리/속도 + 정지당 대기시간."""
-    base_s = distance_m / historical_avg_speed_mps + historical_avg_stop_count * ETA_DEFAULT_WAIT_PER_STOP_S
+    base_s = distance_m / historical_avg_speed_mps + historical_avg_stop_count * wait_per_stop_s
     base_s = max(1.0, base_s)
     return int(round(base_s)), int(round(base_s * 0.75)), int(round(base_s * 1.3))
 
@@ -379,7 +418,10 @@ async def predict(
         p10_s, p50_s, p90_s = sorted(max(1.0, float(v)) for v in raw)
         model_source = "model"
     else:
-        p50_s, p10_s, p90_s = _heuristic_predict(distance_m, speed, stop_count)
+        # 학습 모델이 없을 때는 실제 신호 주기를 아는 만큼 대기시간 가정을 보정한다.
+        # (학습된 모델 경로는 실측 소요시간에서 이미 대기시간을 학습하므로 건드리지 않는다.)
+        wait_per_stop_s = await _resolve_wait_per_stop_s(db, user_id, label)
+        p50_s, p10_s, p90_s = _heuristic_predict(distance_m, speed, stop_count, wait_per_stop_s)
         model_source = "heuristic"
 
     on_time_probability = None

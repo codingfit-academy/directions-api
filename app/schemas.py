@@ -2,7 +2,7 @@
 Pydantic 응답/요청 스키마
 """
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
@@ -193,7 +193,47 @@ class StopClusterOut(BaseModel):
     point_count: int
     matched_signal_id: Optional[int] = None
     matched_signal_distance_m: Optional[float] = None
+    user_label: Optional[str] = Field(
+        default=None,
+        description="사용자가 확인해준 정지 사유: traffic_light / elevator / other",
+    )
+    user_label_text: Optional[str] = Field(
+        default=None, description="user_label == 'other'일 때 사용자가 직접 입력한 설명"
+    )
     model_config = {"from_attributes": True}
+
+
+class StopClusterLabelIn(BaseModel):
+    """앱에서 정지 구간이 무엇이었는지 사용자가 알려줄 때의 요청 본문."""
+
+    label: Literal["traffic_light", "elevator", "other"]
+    text: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="label == 'other'일 때의 자유 입력 (예: 육교, 계단)",
+    )
+
+    @model_validator(mode="after")
+    def _check_text(self) -> "StopClusterLabelIn":
+        if self.label == "other" and not (self.text and self.text.strip()):
+            raise ValueError("label이 'other'이면 text가 필요합니다.")
+        if self.label != "other":
+            self.text = None
+        return self
+
+
+class GpsPointOut(BaseModel):
+    """기록한 이동 경로를 앱 지도에 다시 그릴 때 쓰는 좌표 한 점."""
+
+    lat: float
+    lng: float
+    speed_mps: Optional[float] = None
+    accuracy_m: Optional[float] = None
+    recorded_at: datetime
+    is_noise: bool = Field(
+        default=False,
+        description="전처리에서 노이즈로 판정된 점. 앱은 기본적으로 제외하고 그린다.",
+    )
 
 
 class EtaTrainResult(BaseModel):

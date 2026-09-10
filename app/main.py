@@ -36,12 +36,23 @@ from .routers import gps as gps_router
 from .routers import signals as signals_router
 
 
+# 이미 만들어진 테이블에 나중에 추가된 컬럼들. create_all은 "없는 테이블"만 만들고
+# 기존 테이블에 컬럼을 추가해주지는 않아서, 여기서 idempotent하게 보강한다.
+# (알렘빅을 도입할 규모는 아니라 ADD COLUMN IF NOT EXISTS로 처리)
+_COLUMN_MIGRATIONS = (
+    "ALTER TABLE stop_clusters ADD COLUMN IF NOT EXISTS user_label VARCHAR(32)",
+    "ALTER TABLE stop_clusters ADD COLUMN IF NOT EXISTS user_label_text VARCHAR(100)",
+)
+
+
 # ── 앱 시작 시 PostGIS 확장 활성화 + 테이블 자동 생성 ───────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await enable_postgis()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for statement in _COLUMN_MIGRATIONS:
+            await conn.execute(text(statement))
     yield
 
 
