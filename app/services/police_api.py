@@ -18,6 +18,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from ..config import (
+    DATA_GO_KR_PLAN_SERVICE_KEY,
     DATA_GO_KR_SERVICE_KEY,
     SEOUL_BBOX_MAX_LAT,
     SEOUL_BBOX_MAX_LNG,
@@ -207,13 +208,13 @@ async def fetch_signal_cycle_time(
     TODO: 활용신청 승인 후 실제 응답으로 필드명을 확인할 것 — 지금은 주기로 보이는
     키(CYCLE 계열)를 관대하게 훑는 방식이라, 승인 뒤 한 번 검증이 필요하다.
     """
-    if not DATA_GO_KR_SERVICE_KEY:
+    if not DATA_GO_KR_PLAN_SERVICE_KEY:
         return None
 
     # 이 서비스의 검색 조건은 교차로 "이름"(srchCRNm)이다 — 교차로번호로는 못 거른다.
     # 그래서 이름으로 좁힌 뒤, 응답 안에서 INT_NO가 일치하는 항목을 우선 고른다.
     params = {
-        "serviceKey": DATA_GO_KR_SERVICE_KEY,
+        "serviceKey": DATA_GO_KR_PLAN_SERVICE_KEY,
         "pageNo": 1,
         "numOfRows": 50,
         "type": "json",

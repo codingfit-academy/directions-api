@@ -58,10 +58,19 @@ VWORLD_API_KEY = _val("VWORLD_API_KEY", "AE2D3A36-9F19-3B08-8394-EC64E8266DDC")
 TMAP_API_KEY = _val("TMAP_API_KEY", "njw4yBAyB83Ym0MN9fCrP4wnecYGCbs15zggefg3")
 
 # ── 공공데이터포털 (경찰청 교차로 API) ─────────────────────────
+# 공공데이터포털은 계정당 인증키가 하나이고, 데이터셋마다 "활용신청 승인"만 따로
+# 갈린다. 즉 아래 키 하나로 교차로기반정보서비스(위치)와 교차로계획정보서비스(신호
+# 주기)를 모두 쓸 수 있고, 승인 전에는 SERVICE_KEY_IS_NOT_REGISTERED_ERROR가 난다.
+# ※ Encoding/Decoding 두 가지가 발급되는데, 여기에는 **Decoding(일반 인증키)** 을 넣는다
+#   (httpx가 쿼리스트링을 인코딩하므로 Encoding 키를 넣으면 이중 인코딩된다).
 DATA_GO_KR_SERVICE_KEY = _val(
     "DATA_GO_KR_SERVICE_KEY",
     "37ebc5d0f8167cd620d223440c1a660f62677e3a1c90d2601da7470e2924740f",
 )
+
+# 신호 주기(교차로계획정보서비스)에만 다른 계정의 키를 쓰고 싶을 때만 채운다.
+# 비워두면 위의 DATA_GO_KR_SERVICE_KEY를 그대로 사용한다.
+DATA_GO_KR_PLAN_SERVICE_KEY = _val("DATA_GO_KR_PLAN_SERVICE_KEY", "") or DATA_GO_KR_SERVICE_KEY
 
 # ── 서울 열린데이터광장 (data.seoul.go.kr) ────────────────────
 # 발급: data.seoul.go.kr → 회원가입 → 인증키 신청
