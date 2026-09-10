@@ -23,11 +23,34 @@ Kakao Local 키 (NCP Geocoding 대체용):
 ────────────────────────────────────────────────────────────────
 """
 import os
+import urllib.parse
+
+from dotenv import load_dotenv
+
+# 프로젝트 루트의 .env를 환경변수로 올린다. 서버(docker-compose)는 environment로
+# 직접 주입하지만, 로컬에서 uvicorn을 직접 띄울 때는 이게 없으면 .env가 무시된다.
+load_dotenv(override=False)
 
 
 def _val(env_key: str, default: str) -> str:
     """환경변수가 있으면 사용, 없으면 직접 주입된 default 값을 사용."""
     return (os.getenv(env_key) or default).strip()
+
+
+def _service_key(env_key: str, default: str) -> str:
+    """
+    공공데이터포털 인증키를 정규화한다.
+
+    포털은 같은 키를 Encoding(퍼센트 인코딩) / Decoding 두 가지로 보여주는데,
+    Encoding 쪽을 그대로 넣으면 httpx가 쿼리스트링을 한 번 더 인코딩해서
+    (%2B → %252B) 403이 난다. '%XX'가 보이면 한 번 디코딩해 Decoding 형태로 맞춘다.
+    """
+    value = _val(env_key, default)
+    if "%" in value:
+        decoded = urllib.parse.unquote(value)
+        if decoded != value:
+            return decoded.strip()
+    return value
 
 
 # ── Naver Cloud Platform (서버측 Geocode / Directions) ────────
@@ -63,14 +86,16 @@ TMAP_API_KEY = _val("TMAP_API_KEY", "njw4yBAyB83Ym0MN9fCrP4wnecYGCbs15zggefg3")
 # 주기)를 모두 쓸 수 있고, 승인 전에는 SERVICE_KEY_IS_NOT_REGISTERED_ERROR가 난다.
 # ※ Encoding/Decoding 두 가지가 발급되는데, 여기에는 **Decoding(일반 인증키)** 을 넣는다
 #   (httpx가 쿼리스트링을 인코딩하므로 Encoding 키를 넣으면 이중 인코딩된다).
-DATA_GO_KR_SERVICE_KEY = _val(
+DATA_GO_KR_SERVICE_KEY = _service_key(
     "DATA_GO_KR_SERVICE_KEY",
     "37ebc5d0f8167cd620d223440c1a660f62677e3a1c90d2601da7470e2924740f",
 )
 
 # 신호 주기(교차로계획정보서비스)에만 다른 계정의 키를 쓰고 싶을 때만 채운다.
 # 비워두면 위의 DATA_GO_KR_SERVICE_KEY를 그대로 사용한다.
-DATA_GO_KR_PLAN_SERVICE_KEY = _val("DATA_GO_KR_PLAN_SERVICE_KEY", "") or DATA_GO_KR_SERVICE_KEY
+DATA_GO_KR_PLAN_SERVICE_KEY = (
+    _service_key("DATA_GO_KR_PLAN_SERVICE_KEY", "") or DATA_GO_KR_SERVICE_KEY
+)
 
 # ── 서울 열린데이터광장 (data.seoul.go.kr) ────────────────────
 # 발급: data.seoul.go.kr → 회원가입 → 인증키 신청

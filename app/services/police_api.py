@@ -10,8 +10,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import time
+from statistics import median
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
@@ -75,12 +77,13 @@ def _coord_int_to_deg(v: object) -> Optional[float]:
 
 async def fetch_crossroads(
     region_cd: Optional[str] = None,
-    page_size: int = 1000,
+    page_size: int = 100,
     timeout: float = 30.0,
 ) -> AsyncIterator[CrossRoad]:
     """페이지네이션을 돌며 교차로 목록을 yield 한다."""
     service_key = _service_key()
     page_no = 1
+    fetched = 0
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         while True:
@@ -132,8 +135,12 @@ async def fetch_crossroads(
                     y_coord=y,
                 )
 
+            # 서버가 numOfRows를 100으로 깎아서 주므로, 요청한 page_size가 아니라
+            # 실제로 받은 건수를 누적해서 종료를 판단해야 한다 (이걸 요청값으로
+            # 계산하면 1페이지만 읽고 끝나 388건 중 100건만 적재된다).
+            fetched += len(items)
             total = int(meta.get("totalCount") or 0)
-            if page_no * page_size >= total or not items:
+            if not items or (total and fetched >= total):
                 break
             page_no += 1
 
@@ -195,54 +202,107 @@ async def find_nearest_crossroad(
     return best
 
 
-async def fetch_signal_cycle_time(
-    int_no: str, int_nm: str = "", timeout: float = 15.0
-) -> Optional[int]:
-    """
-    교차로계획정보서비스에서 해당 교차로의 신호 주기(초)를 가져온다.
+# ── 신호 주기(교차로계획정보서비스) ─────────────────────────────
+# 실제 응답 확인 결과(2026-09-10, 활용신청 승인 후):
+#   INT_OPER_CYCLE_VAL : 신호 주기(초). 0은 "해당 계획에 주기 없음"이라 버린다.
+#   OPER_PLAN_HH/MI    : 이 계획이 적용되는 시각 — 같은 교차로도 시간대별로 주기가 다르다.
+#   INT_NO / INT_NM    : 교차로기반정보서비스(위치)의 INT_NO와 그대로 맞물린다
+#                        (실측: 위치 398개 중 351개가 주기 데이터를 가짐).
+#   A_RING_n / B_RING_n_PHASE_VAL : 링별 현시 시간 (지금은 사용하지 않음)
+#
+# srchCRNo/srchCRNm 같은 검색 조건은 서버가 무시하고 항상 1페이지를 돌려준다.
+# 그래서 특정 교차로만 콕 집어 조회할 수 없고, 전체(약 62,000행 / 621페이지)를
+# 한 번 훑어 교차로별 대표 주기로 집계해 두는 방식을 쓴다.
+_PLAN_PAGE_SIZE = 100
+_PLAN_MAX_PAGES = 700  # 실측 621페이지 + 여유
+_plan_cache: dict[str, int] = {}
+_plan_cache_at: float = 0.0
 
-    이 서비스는 별도 활용신청이 필요해서 승인 전에는 인증키가 등록되지 않았다는
-    응답이 온다. 주기를 모르는 것 자체는 치명적이지 않으므로(대기시간은 기본값
-    ETA_DEFAULT_WAIT_PER_STOP_S로 폴백) 실패하면 조용히 None을 반환한다.
 
-    TODO: 활용신청 승인 후 실제 응답으로 필드명을 확인할 것 — 지금은 주기로 보이는
-    키(CYCLE 계열)를 관대하게 훑는 방식이라, 승인 뒤 한 번 검증이 필요하다.
-    """
-    if not DATA_GO_KR_PLAN_SERVICE_KEY:
-        return None
-
-    # 이 서비스의 검색 조건은 교차로 "이름"(srchCRNm)이다 — 교차로번호로는 못 거른다.
-    # 그래서 이름으로 좁힌 뒤, 응답 안에서 INT_NO가 일치하는 항목을 우선 고른다.
+async def _fetch_plan_page(client: httpx.AsyncClient, page_no: int) -> list[dict]:
     params = {
         "serviceKey": DATA_GO_KR_PLAN_SERVICE_KEY,
-        "pageNo": 1,
-        "numOfRows": 50,
+        "pageNo": page_no,
+        "numOfRows": _PLAN_PAGE_SIZE,
         "type": "json",
     }
-    if int_nm:
-        params["srchCRNm"] = int_nm
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            res = await client.get(PLAN_BASE_URL, params=params)
-            res.raise_for_status()
-            payload = res.json()
-    except (httpx.HTTPError, ValueError):
-        return None
+    res = await client.get(PLAN_BASE_URL, params=params)
+    res.raise_for_status()
+    payload = res.json()
+    # 미등록 키 등 오류는 dict(OpenAPI_ServiceResponse)로 온다.
+    if not isinstance(payload, list) or not payload:
+        raise DataGoKrError(
+            "교차로계획정보서비스 응답이 올바르지 않습니다 "
+            "(활용신청 승인 여부/인증키를 확인하세요): "
+            f"{str(payload)[:200]}"
+        )
+    return [it for it in payload[1:] if isinstance(it, dict)]
 
-    # 미등록 키 등 오류 응답은 dict(OpenAPI_ServiceResponse) 형태로 온다.
-    if not isinstance(payload, list):
-        return None
 
-    items = [it for it in payload[1:] if isinstance(it, dict)]
-    # 같은 이름의 교차로가 여러 개일 수 있어 INT_NO가 맞는 것을 우선한다.
-    exact = [it for it in items if str(it.get("INT_NO") or "").strip() == int_no]
+async def fetch_signal_cycles(concurrency: int = 8) -> dict[str, int]:
+    """
+    서울 전체 교차로의 대표 신호 주기를 {INT_NO: 주기초}로 반환한다.
 
-    for item in exact or items:
-        for key, value in item.items():
-            if "CYCLE" not in key.upper():
-                continue
-            cycle = _to_float(value)
-            # 신호 주기는 보통 60~300초 범위. 벗어나면 다른 뜻의 필드로 보고 무시한다.
-            if cycle is not None and 30 <= cycle <= 400:
-                return int(cycle)
-    return None
+    한 교차로에 시간대별 계획이 여러 개 있어서, 0을 제외한 주기들의 중앙값을
+    대표값으로 쓴다 (첨두시/비첨두시 편차를 한 값으로 요약).
+    """
+    cycles: dict[str, list[int]] = {}
+
+    async with httpx.AsyncClient(timeout=40.0) as client:
+        first = await _fetch_plan_page(client, 1)
+        semaphore = asyncio.Semaphore(concurrency)
+
+        def collect(items: list[dict]) -> None:
+            for it in items:
+                int_no = str(it.get("INT_NO") or "").strip()
+                if not int_no:
+                    continue
+                cycle = _to_float(it.get("INT_OPER_CYCLE_VAL"))
+                if cycle and cycle > 0:
+                    cycles.setdefault(int_no, []).append(int(cycle))
+
+        collect(first)
+
+        async def worker(page_no: int) -> list[dict]:
+            async with semaphore:
+                try:
+                    return await _fetch_plan_page(client, page_no)
+                except (httpx.HTTPError, ValueError, DataGoKrError):
+                    return []
+
+        page_no = 2
+        while page_no <= _PLAN_MAX_PAGES:
+            batch = list(range(page_no, min(page_no + concurrency * 4, _PLAN_MAX_PAGES + 1)))
+            results = await asyncio.gather(*(worker(p) for p in batch))
+            for items in results:
+                collect(items)
+            # 빈 페이지가 나오면 끝까지 읽은 것으로 본다.
+            if any(len(items) == 0 for items in results):
+                break
+            page_no = batch[-1] + 1
+
+    return {no: int(median(vals)) for no, vals in cycles.items() if vals}
+
+
+async def load_signal_cycles(force: bool = False) -> dict[str, int]:
+    """교차로별 대표 주기를 캐시와 함께 반환한다 (전체 스캔이라 비용이 크다)."""
+    global _plan_cache, _plan_cache_at
+    if not force and _plan_cache and (time.time() - _plan_cache_at) < _CACHE_TTL_S:
+        return _plan_cache
+
+    cycles = await fetch_signal_cycles()
+    if cycles:
+        _plan_cache = cycles
+        _plan_cache_at = time.time()
+    return cycles
+
+
+def get_cached_signal_cycle(int_no: str) -> Optional[int]:
+    """
+    이미 메모리에 올라와 있는 주기만 조회한다 (없으면 None).
+
+    전체 스캔은 수백 번의 외부 호출이라 사용자 요청 중에 하면 안 된다. 그래서
+    라벨링 같은 실시간 경로에서는 캐시 히트만 노리고, 캐시는 신호등 적재
+    (POST /signals/ingest/police)나 첫 워밍업 때 채운다.
+    """
+    return _plan_cache.get(int_no)

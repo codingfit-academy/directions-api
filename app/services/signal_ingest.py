@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import SIGNAL_LOOKUP_BUFFER_M
 from .police_api import (
     fetch_crossroads,
-    fetch_signal_cycle_time,
     find_nearest_crossroad,
+    get_cached_signal_cycle,
     is_in_seoul,
+    load_signal_cycles,
 )
 
 POLICE_SOURCE = "police_crossroad"
@@ -32,14 +33,22 @@ async def ingest_police_crossroads(
     """
     fetched = inserted = updated = 0
 
+    # 신호 주기(교차로계획정보서비스)를 한 번 훑어 교차로별 대표값으로 준비한다.
+    # 활용신청이 안 됐거나 실패하면 빈 dict가 되고, cycle_time은 NULL로 남는다.
+    try:
+        cycles = await load_signal_cycles()
+    except Exception:
+        cycles = {}
+
     upsert_sql = text(
         """
-        INSERT INTO signals (source, source_id, name, region_cd, geom, updated_at)
+        INSERT INTO signals (source, source_id, name, region_cd, cycle_time, geom, updated_at)
         VALUES (
             :source,
             :source_id,
             :name,
             :region_cd,
+            :cycle_time,
             ST_SetSRID(ST_MakePoint(:x, :y), 4326),
             NOW()
         )
@@ -47,6 +56,7 @@ async def ingest_police_crossroads(
         SET name = EXCLUDED.name,
             region_cd = EXCLUDED.region_cd,
             geom = EXCLUDED.geom,
+            cycle_time = COALESCE(EXCLUDED.cycle_time, signals.cycle_time),
             updated_at = NOW()
         RETURNING (xmax = 0) AS inserted
         """
@@ -61,6 +71,7 @@ async def ingest_police_crossroads(
                 "source_id": cr.int_no,
                 "name": cr.int_nm or None,
                 "region_cd": cr.region_cd or None,
+                "cycle_time": cycles.get(cr.int_no),
                 "x": cr.x_coord,
                 "y": cr.y_coord,
             },
@@ -129,8 +140,10 @@ async def ensure_signal_near(
         return None
     crossroad, distance_m = found
 
-    # 신호 주기는 별도 서비스(활용신청 필요)라 못 가져올 수 있다 — 없으면 NULL로 둔다.
-    cycle_time = await fetch_signal_cycle_time(crossroad.int_no, crossroad.int_nm)
+    # 주기는 이미 메모리에 올라와 있을 때만 붙인다. 전체 스캔은 외부 호출이 수백 번이라
+    # 사용자 요청을 붙잡아 둘 수 없다 — 비어 있으면 NULL로 두고, 신호등 적재
+    # (POST /signals/ingest/police)가 나중에 채운다.
+    cycle_time = get_cached_signal_cycle(crossroad.int_no)
 
     row = (
         await db.execute(
