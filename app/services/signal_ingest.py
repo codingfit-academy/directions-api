@@ -8,6 +8,8 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..database import SessionLocal
+
 from ..config import SIGNAL_LOOKUP_BUFFER_M
 from .police_api import (
     fetch_crossroads,
@@ -175,3 +177,45 @@ async def ensure_signal_near(
         )
     ).mappings().first()
     return int(row["id"]), float(distance_m)
+
+
+async def refresh_signal_cycles() -> int:
+    """
+    주기(cycle_time)가 비어 있는 신호등을 공공 API 값으로 채운다. 채운 개수를 반환.
+
+    백그라운드 작업으로 돌리는 것을 전제로 한다 (요청을 붙잡지 않는다). 교차로계획
+    정보서비스는 특정 교차로만 조회할 수 없어서 전체를 한 번 훑어야 하는데,
+    load_signal_cycles()가 결과를 캐시(12시간)하므로 두 번째 호출부터는 외부 호출이
+    없고 DB 갱신만 남는다.
+
+    관리자 적재(POST /signals/ingest/police)를 한 번도 안 돌려도, 사용자가 정지
+    구간을 신호등으로 확인해줄 때 이 작업이 뒤따라 실행돼 스스로 채워진다.
+    """
+    try:
+        cycles = await load_signal_cycles()
+    except Exception:
+        return 0
+    if not cycles:
+        return 0
+
+    update_sql = text(
+        """
+        UPDATE signals
+        SET cycle_time = :cycle_time, updated_at = NOW()
+        WHERE source = :source AND source_id = :source_id AND cycle_time IS NULL
+        """
+    )
+    filled = 0
+    try:
+        async with SessionLocal() as db:
+            for source_id, cycle_time in cycles.items():
+                result = await db.execute(
+                    update_sql,
+                    {"source": POLICE_SOURCE, "source_id": source_id, "cycle_time": cycle_time},
+                )
+                filled += result.rowcount or 0
+            await db.commit()
+    except Exception:
+        # 최선 노력(best-effort) 보강 작업이라, 실패해도 사용자 요청에는 영향이 없다.
+        return filled
+    return filled

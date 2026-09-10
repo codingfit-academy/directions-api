@@ -35,7 +35,7 @@ from ..schemas import (
     TripFeatureOut,
 )
 from ..services.gps_processing import process_trip, refresh_signal_stop_count
-from ..services.signal_ingest import ensure_signal_near
+from ..services.signal_ingest import ensure_signal_near, refresh_signal_cycles
 
 _TRIP_COLUMNS = (
     "id, user_id, label, started_at, ended_at, origin_lat, origin_lng,"
@@ -271,6 +271,7 @@ async def list_trip_points(
 async def label_stop_cluster(
     stop_id: int,
     body: StopClusterLabelIn,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -343,6 +344,20 @@ async def label_stop_cluster(
     await refresh_signal_stop_count(db, row["trip_id"])
 
     await db.commit()
+
+    # 신호등으로 연결됐는데 주기를 아직 모르면, 응답을 보낸 뒤 백그라운드로 주기를
+    # 채운다. 관리자 적재를 따로 돌리지 않아도 서버가 스스로 보강하도록 하는 장치다
+    # (전체 스캔은 12시간 캐시되므로 반복 호출해도 외부 API를 다시 때리지 않는다).
+    if row["user_label"] == "traffic_light" and row["matched_signal_id"] is not None:
+        signal_cycle = (
+            await db.execute(
+                text("SELECT cycle_time FROM signals WHERE id = :id"),
+                {"id": row["matched_signal_id"]},
+            )
+        ).scalar_one_or_none()
+        if signal_cycle is None:
+            background_tasks.add_task(refresh_signal_cycles)
+
     return StopClusterOut(**dict(row))
 
 

@@ -119,6 +119,15 @@ SEOUL_TOPIS_LINK_IDS = _val("SEOUL_TOPIS_LINK_IDS", "1220003800")
 # 출발지~도착지 직선거리 상한을 둔다. (Haversine 미터)
 MAX_ROUTE_DISTANCE_M = int(_val("MAX_ROUTE_DISTANCE_M", "2000"))
 
+# ── 관리자 전용 작업 (데이터 적재 등) ─────────────────────────
+# 신호등 적재처럼 외부 공공API를 수백 번 호출하는 작업은 아무나 부를 수 없게 막는다.
+# 요청 헤더 `X-Admin-Token`이 이 값과 같아야 통과한다.
+# **비워두면 해당 엔드포인트는 비활성(503)** 이다 — 토큰을 잊고 배포했을 때
+# 열린 상태로 남는 것보다 막혀 있는 게 안전하므로 fail-closed로 둔다.
+# 인증용 비밀값이라 소스에 박지 않고 환경변수(.env)로만 주입한다.
+ADMIN_API_TOKEN = _val("ADMIN_API_TOKEN", "")
+
+
 # ── 인증 (JWT) ──────────────────────────────────────────────
 # 학원 환경 기본값 — 운영 배포 시에는 반드시 환경변수로 교체하세요.
 JWT_SECRET_KEY = _val("JWT_SECRET_KEY", "change-this-secret-in-production-9f8a3d7c1b")

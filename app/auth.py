@@ -5,20 +5,28 @@ JWT 기반 인증 유틸리티.
 - 액세스 토큰 발급/검증: PyJWT (HS256)
 - get_current_user: `Authorization: Bearer <token>` 헤더로 현재 사용자를 조회하는
   FastAPI 의존성. 로그인이 필요한 라우터에서 Depends(get_current_user)로 사용한다.
+- require_admin: `X-Admin-Token` 헤더를 검사하는 의존성. 데이터 적재처럼 비용이
+  큰 관리자 작업을 보호한다.
 """
 from __future__ import annotations
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .config import JWT_ALGORITHM, JWT_EXPIRE_MINUTES, JWT_SECRET_KEY
+from .config import (
+    ADMIN_API_TOKEN,
+    JWT_ALGORITHM,
+    JWT_EXPIRE_MINUTES,
+    JWT_SECRET_KEY,
+)
 from .database import get_db
 from .models import User
 
@@ -65,3 +73,26 @@ async def get_current_user(
     if not user:
         raise credentials_error
     return user
+
+
+def require_admin(
+    x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+) -> None:
+    """
+    관리자 토큰을 검사하는 의존성. 통과하지 못하면 요청을 그 자리에서 끊는다.
+
+    - ADMIN_API_TOKEN이 설정돼 있지 않으면 503으로 막는다(fail-closed). 토큰을
+      잊고 배포했을 때 엔드포인트가 열려 있는 편이 더 위험하기 때문이다.
+    - 비교는 secrets.compare_digest로 해서 타이밍 공격으로 토큰을 한 글자씩
+      알아내지 못하게 한다.
+    """
+    if not ADMIN_API_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="관리자 작업이 비활성화되어 있습니다 (ADMIN_API_TOKEN 미설정).",
+        )
+    if not x_admin_token or not secrets.compare_digest(x_admin_token, ADMIN_API_TOKEN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 권한이 필요합니다.",
+        )
