@@ -29,10 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import KAKAO_MAPS_APP_KEY, NAVER_MAPS_CLIENT_ID
 from .database import Base, enable_postgis, engine, get_db
 from .models import Item
+from .routers import admin as admin_router
 from .routers import auth as auth_router
 from .routers import directions as directions_router
 from .routers import eta as eta_router
 from .routers import gps as gps_router
+from .routers import journeys as journeys_router
 from .routers import signals as signals_router
 
 
@@ -58,9 +60,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Directions API", lifespan=lifespan)
 
+# allow_origins=["*"] 대신 정규식을 쓴다: 배포 환경(Cloudflare 프록시)에서 실제
+# 브라우저(Flutter Web) preflight 요청 시 Access-Control-Allow-Origin 헤더가
+# 통째로 빠지는 문제를 확인했다 — Origin 헤더가 전혀 없는 요청에도
+# Access-Control-Allow-Credentials: true가 붙어 있는 걸로 보아, 프록시가
+# "와일드카드(*) + Credentials" 조합(스펙상 금지된 조합)을 감지해 응답에서
+# Allow-Origin 자체를 지워버리는 것으로 보인다(원인 추정 — 인프라 쪽이라 앱
+# 코드만으로 100% 확인은 불가능). 고정 문자열 "*" 대신 매칭된 origin을 그대로
+# 되돌려주면(echo) 이 조합이 안 생기므로 회피된다.
+#
+# 허용 origin: codingfit.kr 서브도메인 전체(배포된 프론트) + 로컬 개발
+# (Flutter Web `flutter run -d chrome`는 매번 랜덤 포트를 쓰므로 포트 전체 허용).
+_ALLOWED_ORIGIN_REGEX = (
+    r"https://([a-zA-Z0-9-]+\.)*codingfit\.kr"
+    r"|http://localhost(:\d+)?"
+    r"|http://127\.0\.0\.1(:\d+)?"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=_ALLOWED_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -134,6 +153,8 @@ app.include_router(signals_router.router)
 app.include_router(directions_router.router)
 app.include_router(gps_router.router)
 app.include_router(eta_router.router)
+app.include_router(journeys_router.router)
+app.include_router(admin_router.router)
 
 # ── 프론트용 공개 설정 (지도 API 키 등 — 브라우저에 노출되는 값만) ──
 @app.get("/config")

@@ -293,3 +293,40 @@ class TripFeatureOut(BaseModel):
     hour_of_day: int = Field(description="출발 시각 (Asia/Seoul 기준, 0-23)")
     day_of_week: int = Field(description="출발 요일 (0=월 ... 6=일, Asia/Seoul 기준)")
     model_config = {"from_attributes": True}
+
+
+# ── 여정 채팅 (Gemini) ────────────────────────────────────────
+class ChatTurnIn(BaseModel):
+    role: Literal["user", "model"]
+    text: str
+
+
+class JourneyChatIn(BaseModel):
+    label: str = Field(description="어떤 기록 이름에 대한 대화인지 — 답변에 맥락을 주는 용도일 뿐, 예측 계산에는 쓰지 않는다")
+    message: str = Field(min_length=1, max_length=500)
+    history: List[ChatTurnIn] = Field(
+        default_factory=list,
+        description="지금까지의 대화 기록. 서버는 무상태라 클라이언트가 매번 함께 보낸다.",
+    )
+
+
+class JourneyChatOut(BaseModel):
+    """
+    채팅은 자연어에서 목표 도착 시각을 뽑아내는 것까지만 한다 — 예측 소요시간/알람
+    값은 여기서 계산하지 않는다("AI 분석"은 사용자가 직접 실행하는 별도 작업이어야
+    하므로). 시각이 정해지면 앱이 이 target_arrival_at으로 기존 GET /eta/predict를
+    따로 호출해 알람을 계산한다.
+    """
+
+    reply: str = Field(description="Gemini가 생성한 한국어 답변")
+    target_arrival_at: Optional[datetime] = Field(
+        default=None, description="대화에서 추출된 목표 도착 시각 (없으면 아직 시각을 못 정한 것)"
+    )
+
+
+# ── 여정 썸네일 분류 (관리자 페이지 + Gemini 분류) ──────────────
+class ThumbnailCategoryOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    model_config = {"from_attributes": True}

@@ -34,6 +34,7 @@ from ..schemas import (
     StopClusterOut,
     TripFeatureOut,
 )
+from ..services.gemini_classify import classify_and_cache
 from ..services.gps_processing import process_trip, refresh_signal_stop_count
 from ..services.signal_ingest import ensure_signal_near, refresh_signal_cycles
 
@@ -61,6 +62,7 @@ async def _get_own_trip_or_404(db: AsyncSession, trip_id: int, user_id: int) -> 
 @router.post("/trips", response_model=GpsTripOut, status_code=201)
 async def create_trip(
     body: GpsTripCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -90,6 +92,13 @@ async def create_trip(
         )
     ).mappings().first()
     await db.commit()
+
+    # 새 기록 이름이면 카드 썸네일용 분류를 백그라운드로 시도한다(응답 지연 없이).
+    # classify_and_cache가 이미 분류된 이름이면 조용히 아무 것도 안 하므로 매번
+    # 예약해도 안전하다.
+    if body.label:
+        background_tasks.add_task(classify_and_cache, current_user.id, body.label)
+
     return GpsTripOut(**dict(row))
 
 

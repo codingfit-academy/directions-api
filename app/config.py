@@ -127,6 +127,21 @@ MAX_ROUTE_DISTANCE_M = int(_val("MAX_ROUTE_DISTANCE_M", "2000"))
 # 인증용 비밀값이라 소스에 박지 않고 환경변수(.env)로만 주입한다.
 ADMIN_API_TOKEN = _val("ADMIN_API_TOKEN", "")
 
+# ── Gemini API (여정 채팅 + 여정 이름 분류) ────────────────────
+# 발급: https://aistudio.google.com/app/apikey (Google AI Studio, 무료 API 키).
+# 인증용 비밀값이라 ADMIN_API_TOKEN과 같은 이유로 소스에 박지 않고 .env로만 주입한다.
+# **비워두면 관련 엔드포인트는 503으로 비활성화**된다(fail-closed).
+GEMINI_API_KEY = _val("GEMINI_API_KEY", "")
+
+# "가장 저렴한 모델"로 지정한 것 — 2026-09 기준 Flash-Lite 계열 최신 세대.
+# 채팅(자연어 → 시각 추출)과 여정 이름 분류(가장 비슷한 관리자 분류 고르기) 둘 다
+# 텍스트만 다루는 가벼운 작업이라 같은 모델을 쓴다. 이미지는 관리자가 직접
+# 올려서 쓰므로(directions-flutter 관리자 페이지) 이미지 생성 모델은 필요 없다.
+# 구글이 모델을 자주 교체/폐기하므로(예: 2.5 세대는 2026-10말 종료 예정) 주기적으로
+# https://ai.google.dev/gemini-api/docs/models 에서 현재 모델명을 확인하고, 바뀌었으면
+# 코드를 고치지 말고 이 환경변수만 덮어쓸 것.
+GEMINI_CHAT_MODEL = _val("GEMINI_CHAT_MODEL", "gemini-3.1-flash-lite")
+
 
 # ── 인증 (JWT) ──────────────────────────────────────────────
 # 학원 환경 기본값 — 운영 배포 시에는 반드시 환경변수로 교체하세요.

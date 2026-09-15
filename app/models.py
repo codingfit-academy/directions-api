@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -174,4 +175,48 @@ class TripSegmentFeature(Base):
     # day_of_week: Python datetime.weekday() 기준 (0=월 ... 6=일), Asia/Seoul 기준.
     computed_at: Mapped[datetime]    = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ThumbnailCategory(Base):
+    """
+    관리자가 미리 만들어 둔 "분류 → 대표 이미지" 매핑 (directions-flutter 관리자
+    페이지에서 생성/삭제한다). 여정 이름을 Gemini가 이 분류들 중 하나로 매칭하면
+    (JourneyThumbnail), 그 분류의 이미지가 카드 썸네일로 쓰인다.
+    """
+    __tablename__ = "thumbnail_categories"
+
+    id: Mapped[int]           = mapped_column(Integer, primary_key=True)
+    name: Mapped[str]         = mapped_column(String(50), nullable=False, unique=True)
+    image_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    mime_type: Mapped[str]    = mapped_column(String(32), nullable=False, default="image/png")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class JourneyThumbnail(Base):
+    """
+    사용자가 어떤 기록 이름(여정)으로 처음 기록을 시작하면(POST /gps/trips), 그
+    이름이 어느 ThumbnailCategory와 가장 비슷한지 Gemini가 분류해 여기 캐싱해둔다
+    (app/services/gemini_classify.py, 백그라운드로 1회만 실행).
+
+    category_id가 NULL이면 "분류는 해봤지만 어울리는 분류가 없었다"는 뜻이고,
+    행 자체가 없으면 "아직 분류를 안(못) 해봤다"는 뜻이다 — 두 상태를 구분해야
+    똑같은 이름을 매번 다시 분류 시도하지 않는다.
+    """
+    __tablename__ = "journey_thumbnails"
+
+    id: Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    label: Mapped[str]   = mapped_column(String(100), nullable=False)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("thumbnail_categories.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "label", name="uq_journey_thumbnail_user_label"),
     )
