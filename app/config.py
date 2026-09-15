@@ -142,6 +142,19 @@ GEMINI_API_KEY = _val("GEMINI_API_KEY", "")
 # 코드를 고치지 말고 이 환경변수만 덮어쓸 것.
 GEMINI_CHAT_MODEL = _val("GEMINI_CHAT_MODEL", "gemini-3.1-flash-lite")
 
+# ── Cloudflare R2 (여정 분류 대표 이미지 저장) ──────────────────
+# 발급: Cloudflare 대시보드 → R2 → Create bucket → Manage R2 API Tokens.
+# ADMIN_API_TOKEN/GEMINI_API_KEY와 같은 이유로 소스에 기본값을 박지 않고
+# .env로만 주입한다 — 비어 있으면 이미지 업로드/조회 엔드포인트가 503으로
+# 비활성화된다(fail-closed, app/services/r2_storage.py 참고).
+R2_ACCOUNT_ID = _val("R2_ACCOUNT_ID", "")
+R2_ACCESS_KEY_ID = _val("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = _val("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET_NAME = _val("R2_BUCKET_NAME", "")
+# 보통은 비워둔다 — R2_ACCOUNT_ID로 `https://<id>.r2.cloudflarestorage.com`을
+# 자동으로 만든다. 커스텀 엔드포인트를 써야 할 특수한 경우에만 채운다.
+R2_ENDPOINT_URL = _val("R2_ENDPOINT_URL", "")
+
 
 # ── 인증 (JWT) ──────────────────────────────────────────────
 # 학원 환경 기본값 — 운영 배포 시에는 반드시 환경변수로 교체하세요.

@@ -21,6 +21,7 @@ from ..models import JourneyThumbnail, ThumbnailCategory, User
 from ..schemas import JourneyChatIn, JourneyChatOut
 from ..services.gemini_chat import ChatTurn, chat_about_journey
 from ..services.gemini_client import GeminiUnavailableError
+from ..services.r2_storage import R2ObjectNotFoundError, R2UnavailableError, download_image
 
 router = APIRouter(prefix="/journeys", tags=["journeys"])
 
@@ -81,4 +82,10 @@ async def get_thumbnail(
             status_code=404,
             detail="아직 분류되지 않았거나 어울리는 분류가 없는 기록입니다.",
         )
-    return Response(content=row.image_data, media_type=row.mime_type)
+    try:
+        data = await download_image(row.r2_key)
+    except R2UnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except R2ObjectNotFoundError:
+        raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
+    return Response(content=data, media_type=row.mime_type)

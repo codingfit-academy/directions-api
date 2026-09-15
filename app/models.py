@@ -13,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -180,16 +179,21 @@ class TripSegmentFeature(Base):
 
 class ThumbnailCategory(Base):
     """
-    관리자가 미리 만들어 둔 "분류 → 대표 이미지" 매핑 (directions-flutter 관리자
+    관리자가 미리 만들어 둔 "분류 → 대표 이미지" 매핑 (directions-front 관리자
     페이지에서 생성/삭제한다). 여정 이름을 Gemini가 이 분류들 중 하나로 매칭하면
     (JourneyThumbnail), 그 분류의 이미지가 카드 썸네일로 쓰인다.
+
+    이미지 자체는 DB가 아니라 Cloudflare R2에 저장하고, 여기엔 그 오브젝트 키만
+    둔다(app/services/r2_storage.py). API는 요청받을 때마다 R2에서 바이트를 읽어
+    그대로 응답으로 중계한다 — 클라이언트는 R2 주소를 몰라도 되고 기존
+    admin-token/로그인 인증 게이트를 그대로 유지할 수 있다.
     """
     __tablename__ = "thumbnail_categories"
 
-    id: Mapped[int]           = mapped_column(Integer, primary_key=True)
-    name: Mapped[str]         = mapped_column(String(50), nullable=False, unique=True)
-    image_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    mime_type: Mapped[str]    = mapped_column(String(32), nullable=False, default="image/png")
+    id: Mapped[int]        = mapped_column(Integer, primary_key=True)
+    name: Mapped[str]      = mapped_column(String(50), nullable=False, unique=True)
+    r2_key: Mapped[str]    = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False, default="image/png")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

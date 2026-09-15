@@ -44,6 +44,23 @@ from .routers import signals as signals_router
 _COLUMN_MIGRATIONS = (
     "ALTER TABLE stop_clusters ADD COLUMN IF NOT EXISTS user_label VARCHAR(32)",
     "ALTER TABLE stop_clusters ADD COLUMN IF NOT EXISTS user_label_text VARCHAR(100)",
+    # 분류 대표 이미지를 DB(BYTEA)가 아니라 Cloudflare R2에 저장하도록 바꿈
+    # (app/services/r2_storage.py). 기존 배포엔 image_data(NOT NULL) 컬럼이 이미
+    # 있어서 새 행 insert가 막히므로 nullable로 풀어준다 — 반대로 새로 만드는
+    # 테이블은 최신 모델대로 image_data 자체가 없으니, DO 블록으로 컬럼이 있을
+    # 때만 ALTER해서 양쪽 다 안전하게 만든다.
+    "ALTER TABLE thumbnail_categories ADD COLUMN IF NOT EXISTS r2_key VARCHAR(255)",
+    """
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'thumbnail_categories' AND column_name = 'image_data'
+        ) THEN
+            ALTER TABLE thumbnail_categories ALTER COLUMN image_data DROP NOT NULL;
+        END IF;
+    END $$;
+    """,
 )
 
 
