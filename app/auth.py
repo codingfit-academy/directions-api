@@ -77,6 +77,7 @@ async def get_current_user(
 
 def require_admin(
     x_admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+    authorization: Optional[str] = Header(default=None),
 ) -> None:
     """
     관리자 토큰을 검사하는 의존성. 통과하지 못하면 요청을 그 자리에서 끊는다.
@@ -85,13 +86,27 @@ def require_admin(
       잊고 배포했을 때 엔드포인트가 열려 있는 편이 더 위험하기 때문이다.
     - 비교는 secrets.compare_digest로 해서 타이밍 공격으로 토큰을 한 글자씩
       알아내지 못하게 한다.
+    - 토큰은 `X-Admin-Token` 헤더(curl/스크립트로 수동 호출할 때)나
+      `Authorization: Bearer <token>` 헤더(브라우저에서 호출할 때) 둘 중 하나로
+      받는다. 두 개를 모두 받는 이유: 배포 환경 앞단(Cloudflare 등 edge)이 OPTIONS
+      프리플라이트를 애플리케이션까지 보내지 않고 자체적으로 가로채 응답하는데,
+      그 응답의 Access-Control-Allow-Headers가 `Content-Type,Authorization`으로
+      고정돼 있어서 새로 추가한 X-Admin-Token 같은 커스텀 헤더는 브라우저가 프리플라이트
+      단계에서 막아버린다(edge 설정을 직접 못 고치는 상황). 이미 허용되어 있는
+      Authorization 헤더를 재사용하면 이 문제를 피할 수 있다 — 그래서
+      directions-front의 admin 페이지는 Authorization을 쓰고, 기존
+      /signals/ingest/police처럼 브라우저를 거치지 않는 수동 호출은 그대로
+      X-Admin-Token을 계속 쓸 수 있다.
     """
     if not ADMIN_API_TOKEN:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="관리자 작업이 비활성화되어 있습니다 (ADMIN_API_TOKEN 미설정).",
         )
-    if not x_admin_token or not secrets.compare_digest(x_admin_token, ADMIN_API_TOKEN):
+    token = x_admin_token
+    if not token and authorization and authorization.lower().startswith("bearer "):
+        token = authorization[len("bearer "):]
+    if not token or not secrets.compare_digest(token, ADMIN_API_TOKEN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="관리자 권한이 필요합니다.",
