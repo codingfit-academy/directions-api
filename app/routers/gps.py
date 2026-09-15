@@ -214,6 +214,32 @@ async def finish_trip(
     )
 
 
+@router.post("/trips/{trip_id}/cancel", status_code=204)
+async def cancel_trip(
+    trip_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    기록 중간에 취소한다 — finish처럼 완료 처리하지 않고 'discarded' 상태로만
+    남긴다. 이미 업로드된 gps_points는 지우지 않고 그대로 둔다(트래픽/스토리지
+    낭비보다 삭제 로직의 복잡함·FK 제약이 더 부담이라 굳이 지울 이유가 없다) —
+    'discarded' trip은 목록/분석에서 'completed'만 걸러 쓰는 쪽(예: 앱의
+    completedTripsProvider)에서 자연히 빠진다.
+    """
+    trip = await _get_own_trip_or_404(db, trip_id, current_user.id)
+    if trip["status"] != "active":
+        raise HTTPException(
+            status_code=409, detail=f"Trip is not active (status={trip['status']})"
+        )
+
+    await db.execute(
+        text("UPDATE gps_trips SET ended_at = NOW(), status = 'discarded' WHERE id = :id"),
+        {"id": trip_id},
+    )
+    await db.commit()
+
+
 @router.get("/trips/{trip_id}/stops", response_model=list[StopClusterOut])
 async def list_stop_clusters(
     trip_id: int,
