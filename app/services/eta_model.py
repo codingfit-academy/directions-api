@@ -233,7 +233,7 @@ async def _resolve_history(
         await db.execute(
             text(
                 """
-                SELECT AVG(f.avg_speed_mps) AS avg_speed
+                SELECT AVG(f.avg_speed_mps) AS avg_speed, COUNT(*) AS sample_count
                 FROM trip_segment_features f
                 JOIN gps_trips t ON t.id = f.trip_id
                 WHERE t.user_id = :user_id AND t.label IS NOT DISTINCT FROM :label
@@ -250,8 +250,7 @@ async def _resolve_history(
             text(
                 """
                 SELECT AVG(f.avg_speed_mps) AS avg_speed,
-                       AVG(f.stop_count) AS avg_stop_count,
-                       COUNT(*) AS sample_count
+                       AVG(f.stop_count) AS avg_stop_count
                 FROM trip_segment_features f
                 JOIN gps_trips t ON t.id = f.trip_id
                 WHERE t.status = 'completed'
@@ -270,8 +269,13 @@ async def _resolve_history(
         if population_row and population_row["avg_stop_count"] is not None
         else 0.0
     )
-    sample_count = int(population_row["sample_count"]) if population_row else 0
-    return speed, source, stop_count, sample_count
+    # 이 사용자가 "이 기록 이름"으로 실제 완료한 개수 — 전체 사용자/전체 기록
+    # 이름을 합친 population 표본 수가 아니라 이 값을 보여줘야, 앱이 "기록이
+    # N건이라 아직 대략적인 추정이에요"라고 말할 때 그 N이 실제로 맞다.
+    # (population 표본 수는 average speed/정지횟수 폴백 계산에만 내부적으로 쓰고
+    # 사용자에게는 노출하지 않는다.)
+    personal_sample_count = int(personal_row["sample_count"]) if personal_row else 0
+    return speed, source, stop_count, personal_sample_count
 
 
 async def _resolve_distance_m(
