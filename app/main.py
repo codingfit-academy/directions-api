@@ -44,6 +44,15 @@ from .routers import signals as signals_router
 _COLUMN_MIGRATIONS = (
     "ALTER TABLE stop_clusters ADD COLUMN IF NOT EXISTS user_label VARCHAR(32)",
     "ALTER TABLE stop_clusters ADD COLUMN IF NOT EXISTS user_label_text VARCHAR(100)",
+    # 걷는 속도 평균(남/녀) 비교용 — 기존 가입자는 NULL(선택 안 함)로 남는다.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR(16)",
+    # GPS가 튄 trip을 ETA 학습/예측에서 자동으로 제외하기 위한 플래그.
+    "ALTER TABLE trip_segment_features ADD COLUMN IF NOT EXISTS is_outlier BOOLEAN NOT NULL DEFAULT FALSE",
+    # gps_points.is_noise엔 컬럼 레벨 기본값이 없어서(모델의 default=는 ORM
+    # insert()에만 적용됨) raw SQL INSERT(app/routers/gps.py의 upload_points)가
+    # 이 컬럼을 안 채우면 NOT NULL 위반으로 매번 500이 났다 — 그 INSERT문은
+    # is_noise를 명시하도록 고쳤지만, DB 컬럼에도 진짜 기본값을 심어 재발을 막는다.
+    "ALTER TABLE gps_points ALTER COLUMN is_noise SET DEFAULT false",
     # 분류 대표 이미지를 DB(BYTEA)가 아니라 Cloudflare R2에 저장하도록 바꿈
     # (app/services/r2_storage.py). 기존 배포엔 image_data(NOT NULL) 컬럼이 이미
     # 있어서 새 행 insert가 막히므로 nullable로 풀어준다 — 반대로 새로 만드는

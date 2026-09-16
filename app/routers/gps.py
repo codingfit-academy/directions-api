@@ -35,7 +35,7 @@ from ..schemas import (
     TripFeatureOut,
 )
 from ..services.gemini_classify import classify_and_cache
-from ..services.gps_processing import process_trip, refresh_signal_stop_count
+from ..services.gps_processing import process_trip, refresh_outlier_flags, refresh_signal_stop_count
 from ..services.signal_ingest import ensure_signal_near, refresh_signal_cycles
 
 _TRIP_COLUMNS = (
@@ -143,13 +143,17 @@ async def upload_points(
             status_code=409, detail=f"Trip is not active (status={trip['status']})"
         )
 
+    # is_noise를 명시해야 한다 — 모델의 default=False는 SQLAlchemy ORM insert()에서만
+    # 채워지는 "파이썬 쪽" 기본값이라, 여기처럼 순수 text() SQL을 쓸 땐 전혀 적용되지
+    # 않는다. DB 컬럼 자체엔 DEFAULT가 없어(NOT NULL만 있음) 이걸 빼면 매번
+    # NotNullViolation으로 500이 났다 — 그래서 지금까지 좌표가 한 개도 안 쌓이고 있었다.
     insert_sql = text(
         """
-        INSERT INTO gps_points (trip_id, geom, speed_mps, accuracy_m, recorded_at)
+        INSERT INTO gps_points (trip_id, geom, speed_mps, accuracy_m, recorded_at, is_noise)
         VALUES (
             :trip_id,
             ST_SetSRID(ST_MakePoint(:lng, :lat), 4326),
-            :speed_mps, :accuracy_m, :recorded_at
+            :speed_mps, :accuracy_m, :recorded_at, false
         )
         """
     )
@@ -214,6 +218,18 @@ async def finish_trip(
     )
 
 
+async def _delete_trip_cascade(db: AsyncSession, trip_id: int) -> None:
+    """
+    trip 하나와 거기 딸린 데이터를 전부 지운다. gps_points/stop_clusters/
+    trip_segment_features → gps_trips.id에 FK가 있지만 ON DELETE CASCADE가
+    없어서(스키마를 그대로 두고 싶어서) 여기서 순서대로 직접 지운다.
+    호출부(취소/명시적 삭제)에서 커밋한다.
+    """
+    for table in ("trip_segment_features", "stop_clusters", "gps_points"):
+        await db.execute(text(f"DELETE FROM {table} WHERE trip_id = :id"), {"id": trip_id})
+    await db.execute(text("DELETE FROM gps_trips WHERE id = :id"), {"id": trip_id})
+
+
 @router.post("/trips/{trip_id}/cancel", status_code=204)
 async def cancel_trip(
     trip_id: int,
@@ -221,11 +237,9 @@ async def cancel_trip(
     current_user: User = Depends(get_current_user),
 ):
     """
-    기록 중간에 취소한다 — finish처럼 완료 처리하지 않고 'discarded' 상태로만
-    남긴다. 이미 업로드된 gps_points는 지우지 않고 그대로 둔다(트래픽/스토리지
-    낭비보다 삭제 로직의 복잡함·FK 제약이 더 부담이라 굳이 지울 이유가 없다) —
-    'discarded' trip은 목록/분석에서 'completed'만 걸러 쓰는 쪽(예: 앱의
-    completedTripsProvider)에서 자연히 빠진다.
+    기록 중간에 취소한다 — 완료 처리하지 않고 trip과 그동안 업로드된 데이터를
+    통째로 지운다(과거엔 'discarded' 상태로만 남겼었는데, 어차피 쓸모없는 반쪽
+    기록을 DB에 남겨둘 이유가 없어서 실제 삭제로 바꿨다).
     """
     trip = await _get_own_trip_or_404(db, trip_id, current_user.id)
     if trip["status"] != "active":
@@ -233,11 +247,42 @@ async def cancel_trip(
             status_code=409, detail=f"Trip is not active (status={trip['status']})"
         )
 
-    await db.execute(
-        text("UPDATE gps_trips SET ended_at = NOW(), status = 'discarded' WHERE id = :id"),
-        {"id": trip_id},
-    )
+    await _delete_trip_cascade(db, trip_id)
     await db.commit()
+
+
+@router.delete("/trips/{trip_id}", status_code=204)
+async def delete_trip(
+    trip_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    완료된(또는 어떤 상태든) 기록 하나를 사용자가 직접 지운다 — 예: GPS가 튀어서
+    비정상적으로 남은 기록. 같은 (user, label) 그룹에 다른 기록이 남아 있으면
+    이상치 재계산이 필요할 수 있어 refresh_outlier_flags를 한 번 더 돌린다
+    (이 trip 자체는 지워지지만, 그 그룹의 "정상 범위" 자체가 이 trip 때문에
+    쏠려 있었을 수 있기 때문).
+    """
+    trip = await _get_own_trip_or_404(db, trip_id, current_user.id)
+    user_id, label = trip["user_id"], trip["label"]
+
+    await _delete_trip_cascade(db, trip_id)
+    await db.commit()
+
+    if label:
+        remaining = (
+            await db.execute(
+                text(
+                    "SELECT id FROM gps_trips WHERE user_id = :user_id "
+                    "AND label IS NOT DISTINCT FROM :label AND status = 'completed' LIMIT 1"
+                ),
+                {"user_id": user_id, "label": label},
+            )
+        ).first()
+        if remaining:
+            await refresh_outlier_flags(db, remaining[0])
+            await db.commit()
 
 
 @router.get("/trips/{trip_id}/stops", response_model=list[StopClusterOut])
@@ -411,7 +456,7 @@ async def get_trip_feature(
                 """
                 SELECT trip_id, distance_m, actual_duration_s, moving_time_s,
                        stopped_time_s, stop_count, signal_stop_count, avg_speed_mps,
-                       hour_of_day, day_of_week
+                       hour_of_day, day_of_week, is_outlier
                 FROM trip_segment_features
                 WHERE trip_id = :trip_id
                 """

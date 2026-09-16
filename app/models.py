@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,6 +73,9 @@ class User(Base):
     email: Mapped[str]           = mapped_column(String(255), nullable=False, unique=True, index=True)
     username: Mapped[str]        = mapped_column(String(64), nullable=False, unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 'male' / 'female'. 선택 안 하면 NULL — 걷는 속도 평균 비교(멈춘 지점 확인
+    # 화면)에만 쓰고, 값이 없으면 남녀 구분 없는 전체 평균과만 비교한다.
+    gender: Mapped[str]          = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -115,7 +119,14 @@ class GpsPoint(Base):
     speed_mps: Mapped[float]   = mapped_column(Float, nullable=True)
     accuracy_m: Mapped[float]  = mapped_column(Float, nullable=True)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    is_noise: Mapped[bool]  = mapped_column(Boolean, nullable=False, default=False)
+    # server_default를 반드시 같이 줘야 한다 — default=만으론 ORM insert()에서만
+    # 채워지는 "파이썬 쪽" 기본값이라 raw SQL INSERT(app/routers/gps.py의
+    # upload_points)에는 전혀 적용되지 않아, 한동안 NOT NULL 위반으로 매 업로드가
+    # 500 에러였다(그 INSERT문 자체는 이제 is_noise를 명시하도록 고쳤지만, DB
+    # 컬럼에도 진짜 기본값을 둬서 같은 함정이 다시 생기지 않게 한다).
+    is_noise: Mapped[bool]  = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
 
 
 class StopCluster(Base):
@@ -172,6 +183,10 @@ class TripSegmentFeature(Base):
     hour_of_day: Mapped[int]         = mapped_column(Integer, nullable=False)
     day_of_week: Mapped[int]         = mapped_column(Integer, nullable=False)
     # day_of_week: Python datetime.weekday() 기준 (0=월 ... 6=일), Asia/Seoul 기준.
+    # GPS가 튀는 등으로 실측치가 비정상일 때 true — 같은 (user, label) 그룹에 새
+    # trip이 추가될 때마다 app/services/gps_processing.py의 refresh_outlier_flags가
+    # 그룹 전체를 다시 계산한다. ETA 학습/예측 쿼리는 이 값이 true인 행을 제외한다.
+    is_outlier: Mapped[bool]         = mapped_column(Boolean, nullable=False, default=False)
     computed_at: Mapped[datetime]    = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

@@ -108,6 +108,8 @@ class UserCreate(BaseModel):
     email: EmailStr
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=8, description="8자 이상")
+    # 걷는 속도 평균(남/녀) 비교에만 쓴다 — 선택 안 해도 가입 가능.
+    gender: Optional[Literal["male", "female"]] = None
 
 
 class UserLogin(BaseModel):
@@ -119,6 +121,7 @@ class UserOut(BaseModel):
     id: int
     email: str
     username: str
+    gender: Optional[Literal["male", "female"]] = None
     created_at: datetime
     model_config = {"from_attributes": True}
 
@@ -292,6 +295,10 @@ class TripFeatureOut(BaseModel):
     avg_speed_mps: float = Field(description="이동 시간 기준 평균 속도(m/s)")
     hour_of_day: int = Field(description="출발 시각 (Asia/Seoul 기준, 0-23)")
     day_of_week: int = Field(description="출발 요일 (0=월 ... 6=일, Asia/Seoul 기준)")
+    is_outlier: bool = Field(
+        default=False,
+        description="GPS가 튀는 등으로 실측치가 비정상이라 ETA 학습/예측에서 자동 제외된 기록인지",
+    )
     model_config = {"from_attributes": True}
 
 

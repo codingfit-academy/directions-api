@@ -125,22 +125,26 @@ _TRAINING_ROWS_SQL = """
             WHERE t2.user_id = t.user_id
               AND t2.label IS NOT DISTINCT FROM t.label
               AND t2.started_at < t.started_at
+              AND f2.is_outlier = false
         ) AS personal_avg_speed_mps,
         (
             SELECT AVG(f3.avg_speed_mps)
             FROM trip_segment_features f3
             JOIN gps_trips t3 ON t3.id = f3.trip_id
             WHERE t3.started_at < t.started_at
+              AND f3.is_outlier = false
         ) AS population_avg_speed_mps,
         (
             SELECT AVG(f4.stop_count)
             FROM trip_segment_features f4
             JOIN gps_trips t4 ON t4.id = f4.trip_id
             WHERE t4.started_at < t.started_at
+              AND f4.is_outlier = false
         ) AS population_avg_stop_count
     FROM trip_segment_features f
     JOIN gps_trips t ON t.id = f.trip_id
     WHERE t.status = 'completed'
+      AND f.is_outlier = false
     ORDER BY t.started_at ASC
 """
 
@@ -234,6 +238,7 @@ async def _resolve_history(
                 JOIN gps_trips t ON t.id = f.trip_id
                 WHERE t.user_id = :user_id AND t.label IS NOT DISTINCT FROM :label
                   AND t.status = 'completed'
+                  AND f.is_outlier = false
                 """
             ),
             {"user_id": user_id, "label": label},
@@ -250,6 +255,7 @@ async def _resolve_history(
                 FROM trip_segment_features f
                 JOIN gps_trips t ON t.id = f.trip_id
                 WHERE t.status = 'completed'
+                  AND f.is_outlier = false
                 """
             )
         )
@@ -291,6 +297,7 @@ async def _resolve_distance_m(
                 JOIN gps_trips t ON t.id = f.trip_id
                 WHERE t.user_id = :user_id AND t.label IS NOT DISTINCT FROM :label
                   AND t.status = 'completed'
+                  AND f.is_outlier = false
                 """
             ),
             {"user_id": user_id, "label": label},
@@ -307,6 +314,7 @@ async def _resolve_distance_m(
                 FROM trip_segment_features f
                 JOIN gps_trips t ON t.id = f.trip_id
                 WHERE t.status = 'completed'
+                  AND f.is_outlier = false
                 """
             )
         )

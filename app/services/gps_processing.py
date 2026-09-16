@@ -314,6 +314,91 @@ async def _compute_and_store_feature(
     )
 
 
+async def refresh_outlier_flags(db: AsyncSession, trip_id: int) -> None:
+    """
+    방금 trip_segment_features가 계산된 trip과 같은 (사용자, 기록 이름) 그룹
+    전체의 이상치 플래그를 다시 매긴다. 새 trip이 하나 늘면 "정상 범위"의 기준
+    자체가 달라질 수 있어(예: 표본이 3건→4건이 되며 중앙값이 이동) 매번 그룹
+    전체를 다시 계산한다 — 특정 trip 하나만 갱신하지 않는다.
+
+    통계 방법: actual_duration_s의 중앙값 절대편차(MAD, median absolute deviation)
+    기반 modified z-score(Iglewicz & Hoaglin). 평균/표준편차 대신 MAD를 쓰는 이유 —
+    GPS가 크게 튄 trip 자체가 평균/표준편차를 심하게 왜곡시켜 "이상치 때문에
+    이상치를 못 잡는" 문제가 생기기 쉽다. 중앙값 기반인 MAD는 이상치 한두 개에
+    거의 흔들리지 않는다.
+    """
+    target = (
+        await db.execute(
+            text("SELECT user_id, label FROM gps_trips WHERE id = :id"),
+            {"id": trip_id},
+        )
+    ).mappings().first()
+    if target is None:
+        return
+    user_id, label = target["user_id"], target["label"]
+
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT f.trip_id, f.actual_duration_s
+                FROM trip_segment_features f
+                JOIN gps_trips t ON t.id = f.trip_id
+                WHERE t.user_id = :user_id AND t.label IS NOT DISTINCT FROM :label
+                  AND t.status = 'completed'
+                """
+            ),
+            {"user_id": user_id, "label": label},
+        )
+    ).mappings().all()
+
+    # 표본이 너무 적으면(3건 미만) "정상 범위" 자체를 판단할 근거가 없다 —
+    # 이상치 탐지를 하려다 초기 표본을 과도하게 걸러내면 안 되므로 전부 정상으로 둔다.
+    if len(rows) < 3:
+        await db.execute(
+            text(
+                """
+                UPDATE trip_segment_features SET is_outlier = false
+                WHERE trip_id IN (
+                    SELECT id FROM gps_trips
+                    WHERE user_id = :user_id AND label IS NOT DISTINCT FROM :label
+                )
+                """
+            ),
+            {"user_id": user_id, "label": label},
+        )
+        return
+
+    durations = sorted(r["actual_duration_s"] for r in rows)
+    n = len(durations)
+    median = (
+        durations[n // 2] if n % 2 == 1 else (durations[n // 2 - 1] + durations[n // 2]) / 2
+    )
+    abs_devs = sorted(abs(d - median) for d in durations)
+    mad = abs_devs[n // 2] if n % 2 == 1 else (abs_devs[n // 2 - 1] + abs_devs[n // 2]) / 2
+
+    outlier_ids: list[int] = []
+    normal_ids: list[int] = []
+    for r in rows:
+        if mad == 0:
+            # 전부 똑같은 값이면(표본이 극소하거나 우연) 판단을 보류하고 정상 처리.
+            normal_ids.append(r["trip_id"])
+            continue
+        modified_z = 0.6745 * (r["actual_duration_s"] - median) / mad
+        (outlier_ids if abs(modified_z) > 3.5 else normal_ids).append(r["trip_id"])
+
+    if outlier_ids:
+        await db.execute(
+            text("UPDATE trip_segment_features SET is_outlier = true WHERE trip_id = ANY(:ids)"),
+            {"ids": outlier_ids},
+        )
+    if normal_ids:
+        await db.execute(
+            text("UPDATE trip_segment_features SET is_outlier = false WHERE trip_id = ANY(:ids)"),
+            {"ids": normal_ids},
+        )
+
+
 async def process_trip(trip_id: int) -> None:
     """trip 종료 후 백그라운드로 실행되는 전체 파이프라인 (finish_trip에서 트리거)."""
     async with SessionLocal() as db:
@@ -360,6 +445,7 @@ async def _process_trip(db: AsyncSession, trip_id: int) -> None:
         await _insert_stop_cluster(db, trip_id, stop)
 
     await _compute_and_store_feature(db, trip_id, kept)
+    await refresh_outlier_flags(db, trip_id)
 
     await db.commit()
 
