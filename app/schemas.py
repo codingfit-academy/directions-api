@@ -133,6 +133,15 @@ class TokenOut(BaseModel):
 
 
 # ── GPS 궤적 수집 ─────────────────────────────────────────────
+class RenameLabelIn(BaseModel):
+    """
+    기록 이름(여정)을 통째로 바꾼다 — 이 이름으로 쌓인 과거 기록 전부의 label이
+    한 번에 바뀐다(개별 trip이 아니라 "여정" 단위 개념이라서).
+    """
+    old_label: str = Field(min_length=1, max_length=100)
+    new_label: str = Field(min_length=1, max_length=100)
+
+
 class GpsTripCreate(BaseModel):
     label: Optional[str] = Field(
         default=None, max_length=100, description="기록 이름 (예: '퇴근길 산책'). 앱의 '기록하기' 화면에서 씀"

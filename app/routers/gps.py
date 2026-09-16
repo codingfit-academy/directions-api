@@ -30,6 +30,7 @@ from ..schemas import (
     GpsTripCreate,
     GpsTripFinishResult,
     GpsTripOut,
+    RenameLabelIn,
     StopClusterLabelIn,
     StopClusterOut,
     TripFeatureOut,
@@ -118,6 +119,49 @@ async def list_trips(
         )
     ).mappings().all()
     return [GpsTripOut(**dict(r)) for r in rows]
+
+
+@router.patch("/trips/rename-label", status_code=204)
+async def rename_label(
+    body: RenameLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    기록 이름(여정)을 바꾼다 — 개별 trip 하나가 아니라, 이 이름으로 쌓인 이
+    사용자의 모든 trip이 한 번에 새 이름으로 바뀐다. 이미 존재하는 다른 이름으로
+    바꾸면 그 여정과 합쳐지는 효과가 난다(둘 다 같은 label을 공유하게 되므로) —
+    의도적인 동작이다.
+    """
+    old = body.old_label.strip()
+    new = body.new_label.strip()
+    if not new:
+        raise HTTPException(status_code=400, detail="새 이름을 입력하세요.")
+
+    await db.execute(
+        text(
+            "UPDATE gps_trips SET label = :new_label "
+            "WHERE user_id = :user_id AND label IS NOT DISTINCT FROM :old_label"
+        ),
+        {"new_label": new, "user_id": current_user.id, "old_label": old},
+    )
+    await db.commit()
+
+    # 이름이 합쳐졌을 수도 있으니(다른 여정과 같은 이름이 됐을 수 있음) 새 이름
+    # 그룹 전체의 이상치 플래그를 다시 매긴다.
+    latest = (
+        await db.execute(
+            text(
+                "SELECT id FROM gps_trips WHERE user_id = :user_id "
+                "AND label IS NOT DISTINCT FROM :new_label AND status = 'completed' "
+                "ORDER BY started_at DESC LIMIT 1"
+            ),
+            {"user_id": current_user.id, "new_label": new},
+        )
+    ).first()
+    if latest:
+        await refresh_outlier_flags(db, latest[0])
+        await db.commit()
 
 
 @router.get("/trips/{trip_id}", response_model=GpsTripOut)
